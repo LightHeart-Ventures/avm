@@ -212,6 +212,13 @@ pub struct AgentCard {
     pub mcp_servers: Vec<McpServerRef>,
     /// Inbound authorization policy.
     pub auth_policy: AuthPolicy,
+    // TODO(a2a-policy): reserve `pub a2a_policy: A2APolicy` here, sourced from
+    // `crate::a2a_policy::A2APolicy` once that module lands (owned by the
+    // network-isolation workstream, branch `aish/w_YH33ey4G`). It must carry
+    // `#[serde(default)]` so cards written before it existed still deserialize.
+    // Deliberately NOT defined here: a competing local `A2APolicy` type would
+    // have to be deleted on merge. Tenant/project boundary inputs for that
+    // policy are already available via `scope` / `tenant_id()` / `project_id()`.
     /// Free-form annotations (owner, repo, cost centre, …).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, String>,
@@ -234,6 +241,19 @@ impl AgentCard {
             auth_policy: AuthPolicy::default(),
             metadata: BTreeMap::new(),
         }
+    }
+
+    /// Tenant this agent is scoped to. Empty for system-scoped agents.
+    ///
+    /// Convenience accessor for policy layers that gate on the tenant boundary
+    /// without depending on [`avm_proto::types::Scope`]'s shape.
+    pub fn tenant_id(&self) -> &str {
+        &self.scope.tenant_id
+    }
+
+    /// Project this agent is scoped to. Empty for system- or tenant-scoped agents.
+    pub fn project_id(&self) -> &str {
+        &self.scope.project_id
     }
 
     /// Does this card advertise `capability`?
@@ -337,6 +357,17 @@ mod tests {
         let json = serde_json::to_string(&card).unwrap();
         let back: AgentCard = serde_json::from_str(&json).unwrap();
         assert_eq!(card, back);
+    }
+
+    #[test]
+    fn scope_accessors_expose_tenant_and_project() {
+        let card = AgentCard::example();
+        assert_eq!(card.tenant_id(), "t_lightheart");
+        assert_eq!(card.project_id(), "b_avm");
+
+        let system = AgentCard::new("ag_sys", "Sys", ModelRef::hosted("anthropic", "m"));
+        assert!(system.tenant_id().is_empty());
+        assert!(system.project_id().is_empty());
     }
 
     #[test]
