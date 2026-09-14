@@ -8,7 +8,11 @@ use clap::Parser;
 #[derive(Debug, Parser)]
 #[command(name = "avm-scheduler", about = "AVM job scheduler / reconciler")]
 struct Args {
-    #[arg(long, env = "DATABASE_URL", default_value = "postgres://avm:avm@localhost:5432/avm")]
+    #[arg(
+        long,
+        env = "DATABASE_URL",
+        default_value = "postgres://avm:avm@localhost:5432/avm"
+    )]
     database_url: String,
 
     #[arg(long, env = "NATS_URL", default_value = "nats://localhost:4222")]
@@ -24,7 +28,11 @@ async fn main() -> anyhow::Result<()> {
     let otel = avm_otel::init_otel("avm-scheduler", env!("CARGO_PKG_VERSION"));
     let args = Args::parse();
 
-    let pool = db::connect(&DbConfig { url: args.database_url, ..DbConfig::from_env() }).await?;
+    let pool = db::connect(&DbConfig {
+        url: args.database_url,
+        ..DbConfig::from_env()
+    })
+    .await?;
     let publisher = Publisher::connect(&args.nats_url).await?;
 
     let cfg = SchedulerConfig {

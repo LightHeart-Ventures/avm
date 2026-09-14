@@ -15,6 +15,7 @@
 //! instrumentation level of `basic` or `detailed`.
 
 pub mod agent_runner;
+pub mod model_server;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -29,6 +30,7 @@ use avm_storage::{jobs, Db};
 use tokio::sync::Semaphore;
 
 pub use agent_runner::{AgentRunner, RunOutcome, RunSpec};
+pub use model_server::{ExecutorKind, ModelServerSpec, Mount};
 
 /// Executor backend label for `avm_executor_container_duration_seconds`.
 ///

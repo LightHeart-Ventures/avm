@@ -1,9 +1,429 @@
 # AVM Implementation Plan
 
-Living design doc. One top-level `##` section per subsystem — **append your
-section, don't rewrite someone else's.** `ARCHITECTURE.md` describes what AVM
-*is*; this file describes how each piece gets built and why it's shaped that
-way.
+Living document. Each section is written by the spike that owns it; sections
+are additive and can land independently.
+
+> **Section ownership**
+> | Section | Owner spike |
+> |---|---|
+> | A2A + Agent Card | `feat/a2a-agent-card` |
+> | JSON-Schema tool signatures | tool-introspection spike |
+> | OCI model distribution | model-distribution spike |
+> | Network Isolation & A2A Security | this document (below) |
+
+---
+
+## Network Isolation & A2A Security
+
+### Executive summary
+
+AVM is multi-tenant, and agents are arbitrary user-supplied code. We therefore
+assume **every agent container is potentially hostile** and design so that no
+single control failure produces a cross-tenant breach.
+
+Isolation is enforced at four independent layers. Each assumes the others may
+have failed:
+
+| # | Layer | Mechanism | Blocks | Phase |
+|---|---|---|---|---|
+| 1 | **API** | `validate_a2a_dispatch()` in `avm-gateway/src/security.rs` | An agent asking the platform to route work to an agent it may not reach | **Phase 1 — this PR** |
+| 2 | **Queue** | Per-tenant NATS accounts + subject ACLs (`docs/nats/`) | Subscribing to another tenant's streams; forging results; writing a peer's A2A subject | Phase 2 |
+| 3 | **Container** | Kubernetes NetworkPolicies (`docs/network-policies/`) | Direct Pod-to-Pod traffic that bypasses the gateway entirely | Phase 3 |
+| 4 | **Data** | Postgres RLS (`migrations/006_add_agent_isolation_rls.sql`) | A missing `WHERE tenant_id = …`, or a leaked DB credential | Phase 4 |
+
+Only layer 1 understands *policy* (trusted peers, intra-project opt-in).
+Layers 2–4 are blunt boundaries whose job is to make the sanctioned path the
+**only reachable** path, so that layer 1 cannot be routed around.
+
+Two invariants hold at every layer:
+
+1. **Tenant boundaries are hard.** No configuration value anywhere in the
+   system permits cross-tenant communication. There is deliberately no
+   `allow_cross_tenant` field to set.
+2. **Intra-project A2A is deny-by-default.** Co-location in a project is not
+   consent. The callee must opt in explicitly.
+
+### Threat model
+
+| Threat | Layer that stops it |
+|---|---|
+| Agent calls `POST /a2a/task` targeting another tenant's agent | 1 (gateway) |
+| Agent calls a sibling agent in its own project without being invited | 1 (gateway) |
+| Agent opens a raw socket to a sibling Pod's IP | 3 (NetworkPolicy) |
+| Agent connects to NATS and subscribes to `avm.jobs.>` | 2 (subject ACL) |
+| Agent publishes onto a peer's `avm.a2a.…` subject to skip the gateway | 2 (deny-pub on `avm.a2a.>`) |
+| Application bug drops the tenant predicate from a query | 4 (RLS) |
+| Stolen DB credential used from outside the cluster | 4 (RLS) + 3 (egress deny) |
+| Stolen NATS credential | 2 (per-tenant account; revocation) |
+| Agent exfiltrates data to the public internet | 3 (default-deny egress) |
+
+Explicitly **out of scope** for this design: isolation *within* a single Pod
+(sidecars share a network namespace), side-channel attacks between co-tenant
+nodes, and supply-chain compromise of the agent image itself.
+
+---
+
+### 1. NATS tenant isolation (Phase 2)
+
+**One NATS account per tenant.** Accounts — not subject prefixes — are the
+hard isolation primitive in NATS: subjects do not cross an account boundary at
+all. A shared account with prefix conventions is one typo away from a
+cross-tenant leak; an account boundary is not.
+
+Subject layout:
+
+```
+avm.jobs.<tenant>.<project>              scheduler → executor
+avm.results.<tenant>.<project>           executor  → scheduler
+avm.a2a.<tenant>.<project>.<agent>       gateway   → agent
+avm.gateway.<tenant>.dispatch            agent     → gateway
+```
+
+Per-agent users are scoped tighter still. The load-bearing rule:
+
+- agent users **may subscribe** only to their own `avm.a2a.<t>.<p>.<agent>`;
+- agent users are **denied publish on `avm.a2a.>` entirely**.
+
+That second rule is what makes the gateway unavoidable at the queue layer — an
+agent has no way to hand work to a peer except by asking the gateway, where
+layer 1 evaluates it.
+
+Accounts declare `exports: []` and `imports: []`. Any export added here is a
+cross-tenant channel and must be treated as a defect.
+
+Credentials are NSC/JWT with `--expiry`, so rotation is routine rather than an
+incident. Generation, rotation, revocation and the isolation-verification
+probes are in `docs/nats/README.md`.
+
+### 2. A2A scope validation (Phase 1 — implemented in this PR)
+
+Every agent publishes an Agent Card carrying an `A2APolicy`
+(`avm-agent/src/a2a_policy.rs`):
+
+```rust
+pub struct A2APolicy {
+    pub default: TrustDefault,       // Deny (default) | Allow
+    pub trusted_peers: Vec<String>,  // agent IDs allowed to call us
+    pub allow_intra_project: bool,   // default false
+    pub allow_cross_project: bool,   // default false
+}
+```
+
+`A2APolicy::default()` is the closed policy. A card that omits the field
+deserializes to deny-all — the failure mode of a forgotten config is *closed*,
+not open.
+
+`validate_a2a_dispatch()` (`avm-gateway/src/security.rs`) evaluates in this
+fixed order and returns on the first failure. Order matters: the hardest
+boundary is checked first so a cross-tenant attempt can never be masked by a
+permissive peer list.
+
+| # | Check | Failure |
+|---|---|---|
+| 0 | Card describes the routed target | `AuthError::CardTargetMismatch` |
+| 0b | Source == target (self-dispatch) | *allowed, short-circuits* |
+| 1 | `source.tenant_id == target.tenant_id` | `ScopeError::CrossTenantDenied` |
+| 2 | Different project ⇒ `allow_cross_project` | `ScopeError::CrossProjectDenied` |
+| 3 | Same project ⇒ `allow_intra_project` | `ScopeError::IntraProjectDenied` |
+| 4 | Caller in `trusted_peers`, else `default == Allow` | `AuthError::PeerNotTrusted` |
+
+Rule 1 consults no policy field at all — it is unconditional.
+
+**Auditing.** Every call emits exactly one `SecurityEvent` through a
+`SecurityAudit` sink, on the allow path as well as the deny path. There is no
+silent branch. The default `TracingAudit` writes a structured event on target
+`avm.security.a2a` (`info` on allow, `warn` on deny) which the OTel pipeline
+exports; deployments should additionally persist to `audit_logs` (migration
+`003`). All denials surface as HTTP 403 with no distinction between "not
+permitted" and "does not exist" — we do not leak the existence of other
+tenants' agents.
+
+`evaluate()` is exposed as a pure, side-effect-free variant for admission
+dry-runs.
+
+Wiring: `POST /a2a/task` calls `validate_a2a_dispatch()` **before** any job is
+published to NATS, and returns 403 on `Err`.
+
+### 3. Container network policies (Phase 3)
+
+Default-deny egress *and* ingress on every Pod labelled
+`avm.io/workload: agent`, then whitelist exactly: DNS, `avm-gateway:8080`,
+`avm-server:50051`, `nats:4222`, `postgres:5432`. Agent-to-agent Pod traffic
+is dropped by the CNI, so an agent that ignores the gateway has nowhere to go.
+
+Ingress to agents is permitted only from the gateway, which means every task
+an agent receives has necessarily passed `validate_a2a_dispatch()`.
+
+An opt-in per-pair exception template exists
+(`docs/network-policies/allow-peer-communication.yaml`) for the rare case that
+needs a direct data path. It is annotated with owner and review date, and
+requires the tenant label to match on both sides. Its real cost: direct peer
+traffic is invisible to the gateway and therefore **absent from the A2A audit
+trail**. That is why the default is off.
+
+Hard prerequisite: a CNI that actually enforces NetworkPolicy. An unenforced
+policy is indistinguishable from an enforced one until an incident, so the
+rollout runbook includes a deliberate connectivity test that must fail.
+
+### 4. Postgres RLS (Phase 4)
+
+`migrations/006_add_agent_isolation_rls.sql` enables and **forces** row-level
+security on the isolated tables, with a policy of the shape:
+
+```sql
+USING (avm_current_tenant() IS NOT NULL AND tenant_id = avm_current_tenant())
+```
+
+`avm_current_tenant()` reads `current_setting('app.tenant_id', true)`. The
+`IS NOT NULL` guard makes an unset GUC yield **zero rows** — the failure mode
+is fail-closed. `WITH CHECK` mirrors `USING`, so a write cannot plant a row
+into another tenant either. Where a `project_id` column exists the policy
+narrows further, while keeping tenant-scoped rows (`project_id = ''`) visible
+as ancestors of the project scope, consistent with AVM's scope-inheritance
+model.
+
+Callers must issue `SET LOCAL app.tenant_id = …` at transaction start —
+`SET LOCAL`, not `SET`, so a pooled connection cannot leak identity to the
+next checkout. `avm-storage` owns this.
+
+Two roles: `avm_app` (runtime, subject to RLS) and `avm_migrator`
+(`BYPASSRLS`, for migrations and the scheduler's purge job).
+
+The migration applies to whichever of `agent_state` / `agent_memory` /
+`execution_logs` / `memories` / `jobs` / `audit_logs` exist, so it is correct
+both against today's schema and after the A2A spike's table renames.
+
+### 5. Proto surface
+
+`proto/avm_service.proto` gains `SecurityEvent`, `ScopeError`, `AuthError` and
+the `A2AError` wrapper, so denials are typed on the wire and the audit record
+has a schema rather than being free-form JSON.
+
+---
+
+### Phased rollout
+
+| Phase | Scope | Status | Risk if skipped |
+|---|---|---|---|
+| **1** | Gateway scope validation + Agent Card `A2APolicy` + audit + typed errors | **This PR** | Any agent can dispatch to any other agent |
+| **2** | Per-tenant NATS accounts, subject ACLs, NSC credential lifecycle | Follow-on spike | Gateway is bypassable via a direct NATS publish |
+| **3** | Kubernetes NetworkPolicies rolled out per tenant namespace | Follow-on spike | Gateway is bypassable via a direct Pod dial |
+| **4** | Postgres RLS enabled, `avm_app` / `avm_migrator` roles, `SET LOCAL` in `avm-storage` | Follow-on spike | A single missing predicate leaks rows |
+
+Deliberate ordering: Phase 1 first because it is the only layer that carries
+policy semantics and the only one that produces an audit trail — it is what
+tells you whether Phases 2–4 would have blocked anything real. Phases 2–4 then
+close the bypasses in ascending order of blast radius.
+
+**Rollout discipline.** Phases 2–4 each change a boundary that currently
+permits traffic. Enable per tenant namespace, run the verification probes in
+the respective README (each is written so the *expected* result is a failure),
+and only then widen. Every one of these will surface an undocumented path
+something was quietly relying on — finding those is the point.
+
+---
+
+## Model distribution: OCI artifacts + content-addressed storage
+
+**Status:** design landed, node-local data path implemented (`avm-models`),
+scheduler/executor wiring implemented, registry client behind a feature flag.
+
+### 1. Why OCI artifacts
+
+Model weights are large, immutable, and shared by many agents. That is exactly
+the shape of a container layer, so we reuse the container ecosystem instead of
+inventing a transport:
+
+| Need | What OCI gives us |
+|---|---|
+| Immutability | Content-addressed digests, end to end |
+| Dedup | Same digest = same bytes, cached once per node |
+| Auth / rate limits | Existing registry auth (GHCR PAT, ECR IAM) |
+| Provenance | Manifest annotations, cosign signatures, SBOMs |
+| Mirroring | Pull-through caches, air-gapped `oras copy` |
+
+Artifact shape:
+
+```text
+manifest   application/vnd.oci.image.manifest.v1+json
+  artifactType  application/vnd.avm.model.v1+json
+  config        application/vnd.avm.model.config.v1+json   { backend, params, license }
+  layer[0]      application/vnd.avm.model.weights.v1       <the weights blob>
+```
+
+Rust client: **`oci-client`** — the oras-project crate
+(`github.com/oras-project/rust-oci-client`). The bare `oras` crate name on
+crates.io is an unreleased `0.0.1` placeholder and is deliberately not used.
+
+### 2. Model reference format
+
+```text
+oci://<registry>/<repository>[:<tag>]@sha256:<64 lowercase hex>
+
+oci://ghcr.io/lightheart/qwen3-8b:q4_k_m@sha256:e3b0c442…b855
+oci://registry.local:5000/models/phi4@sha256:1111…1111
+```
+
+Rules enforced by `ModelRef::parse`:
+
+* The `@sha256:…` digest is **mandatory** — unpinned refs are rejected at parse
+  time, so nothing downstream can be surprised by a moving tag.
+* The tag is advisory provenance; the digest is the identity. A `:` after the
+  last `/` is a tag, a `:` inside the host is a port.
+* Only `sha256` today; the `algo:hex` split leaves room for `sha512`.
+* `ModelRef` carries a `backend` hint (`llama.cpp` | `vllm` | `tgi`) used to
+  pick a model-server image, and `size_bytes` for GC accounting.
+
+Agents reference models by this URI in their Agent Card (`model_ref`), which
+keeps the A2A surface unchanged: the card carries a string, the scheduler
+resolves it to a digest and scores residency.
+
+### 3. Content-addressed storage layout
+
+Store root `/var/lib/avm/models` (override per node):
+
+```text
+/var/lib/avm/models/
+  blobs/sha256/<aa>/<full-hex>   immutable weights, bind-mounted ro into model servers
+  meta/<full-hex>.json           ModelRef + pulled_at + last_access + verified
+  tmp/<full-hex>.part            staging for in-flight pulls
+```
+
+Invariants:
+
+* **Atomic publish.** Bytes are staged in `tmp/`, hashed, and only then
+  `rename(2)`d into `blobs/`. A blob visible under `blobs/` is always complete —
+  a crashed pull leaves garbage in `tmp/`, never a torn blob.
+* **Verify before publish.** `commit_bytes` refuses a digest mismatch, so a
+  corrupt or MITM'd artifact can never become resident.
+* **Two-char shard** (`blobs/sha256/ab/ab12…`) keeps directory fan-out sane.
+* **Metadata is a sidecar, not a lock.** Losing `meta/` degrades residency to
+  `absent` and triggers a re-pull; it never corrupts the blob.
+* `blobs/` is the only path mounted into containers, always read-only. A model
+  server can never mutate weights.
+
+### 4. Pull / cache / residency flow
+
+```text
+scheduler ──placement──▶ executor(node)
+                            │ 1. ModelStore::pull(model_ref)
+                            │      meta hit + blob present ─▶ touch, done (no network)
+                            │      miss ─▶ ArtifactFetcher::fetch
+                            │             OciArtifactClient  (registry)
+                            │             LocalDirFetcher    (air-gapped mirror)
+                            │ 2. sha256 verify ─▶ tmp/ ─▶ rename ─▶ blobs/
+                            │ 3. Postgres: model_pulls (checksum_ok, duration_ms)
+                            │ 4. Postgres: model_placements (status, serving, endpoint)
+                            └ 5. publish node label model.avm.io/<digest>=resident
+```
+
+Residency ladder:
+
+| State | Meaning |
+|---|---|
+| `resident` | Blob on disk **and** digest verified |
+| `cached` | Blob on disk, verification deferred (cheap hot path) |
+| `absent` | Node must pull |
+| `pulling` / `failed` | Transient states recorded in Postgres only |
+
+Postgres (migration `006_create_models.sql`) is the cluster-wide view:
+
+* `models` — catalogue keyed by digest (registry, repo, tag, size, backend).
+* `model_pulls` — append-only pull + checksum audit trail per node.
+* `model_placements` — current `(digest, node_id)` residency, `serving` flag and
+  endpoint; the scheduler's residency input and what node labels are rebuilt
+  from after an executor restart.
+
+### 5. GC strategy
+
+`GcPolicy` = **LRU by `last_access`, bounded by a hard byte ceiling**:
+
+* `max_bytes` — hard ceiling; eviction runs until usage is at or below it.
+* `high_watermark` (default `0.85`) — the level that *triggers* a pass, so GC
+  does not thrash at the boundary.
+* `min_age` (default 15 min) — a freshly pulled blob is never evicted, which
+  kills the race where GC reaps weights a pending placement is about to use.
+* `pinned` — digests with a live model server; never evicted.
+* `dry_run` — report the eviction set without deleting (what `avm models gc
+  --dry-run` prints).
+
+Eviction order is oldest-access-first; every pass returns a `GcReport`
+(`bytes_before`, `bytes_after`, `evicted`, `retained_pinned`) which is logged and
+mirrored into `model_pulls` as `evicted` rows so cache churn is measurable.
+
+### 6. Scheduling and affinity
+
+Placement is a **soft-constraint scorer** (`avm-scheduler::placement`), not a
+bin-packer:
+
+```text
+score = residency_weight · residency(node, digest)    resident 100 / cached 40 / absent 0
+      + affinity_weight  · model_server_live(node)    +50 when a server already serves it
+      + spread_weight    · free_slot_fraction(node)   ×20, keeps the cluster from hot-spotting
+      - pull_penalty     · would_cold_pull(node)      −25, cold pulls cost minutes
+```
+
+* **Residency is soft.** A node without the weights stays *feasible* — it just
+  loses to one that has them. This avoids the deadlock where a brand-new digest
+  is unschedulable everywhere.
+* **Hard constraints** are the only source of infeasibility: `required_labels`
+  (e.g. `gpu.avm.io/kind=a100`), insufficient free slots, cordoned node.
+* **Model affinity** co-schedules an agent with a live model server on the same
+  node (`serving_digests`), so inference is a loopback call rather than a
+  cross-node hop.
+* Every `PlacementScore` keeps its components (`residency_score`,
+  `affinity_score`, `spread_score`, `pull_penalty`) plus a rejection `reason`, so
+  `avm scheduler explain` can show why a node won or lost.
+
+Node labels are the contract between executor and scheduler:
+
+```text
+model.avm.io/sha256:<hex> = resident | cached | absent
+```
+
+### 7. Model servers (`kind: ModelServer`)
+
+`ExecutorKind::ModelServer` runs an inference container that mounts the blob
+store read-only:
+
+```text
+--mount type=bind,src=/var/lib/avm/models/blobs,dst=/models,ro
+--model /models/sha256/e3/e3b0c442…b855
+```
+
+* Weights are **never** baked into the server image — one image serves any
+  digest the node holds.
+* **Multiple model servers per node are allowed.** How many, and whether a
+  single multi-model server is preferable, is deliberately left open (see
+  follow-ups); nothing in the design assumes one server per node.
+* After `/health` passes, the executor publishes `model.avm.io/<digest>=resident`
+  and writes `model_placements(serving=true, endpoint=…)`.
+* Env handed to the container: `AVM_MODEL_DIR`, `AVM_MODEL_SERVER`,
+  `AVM_MODEL_PORT`, `AVM_MODEL_DIGESTS`, `AVM_MODEL_BACKEND`.
+
+### 8. Feature gating and hermetic tests
+
+`avm-models` compiles the real registry client only under
+`--features oci-registry`; the default build has no TLS/HTTP dependency and the
+whole crate is unit-testable offline via `LocalDirFetcher`. Without the feature
+`OciArtifactClient::pull_blob` returns `ModelError::RegistryFeatureDisabled`, so
+call sites, the scheduler and the executor compile identically either way.
+
+```bash
+cargo test  --workspace                            # hermetic, no network
+cargo check -p avm-models --features oci-registry  # real registry client
+```
+
+### 9. Follow-ups (deliberately out of scope here)
+
+| Item | Why deferred |
+|---|---|
+| Model-server fan-out policy (one vs. many per node) | Needs a separate spike; nothing here assumes a single server |
+| `oras push` from Rust | Publishing runs in CI today; pull is the hot path |
+| Streaming / chunked pulls with resume | Current fetcher buffers; fine for the sizes we ship first |
+| Cosign signature + SBOM verification at pull time | Slots in as another `commit_bytes` precondition |
+| Pull-through registry mirror per rack | Bandwidth optimisation, not correctness |
+| Proactive pre-warm (pull on placement *intent*) | Wants placement telemetry first |
 
 ---
 

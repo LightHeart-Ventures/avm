@@ -14,10 +14,20 @@ use uuid::Uuid;
 #[derive(Debug, Parser)]
 #[command(name = "avm", version, about = "AVM command-line tool")]
 struct Cli {
-    #[arg(long, env = "DATABASE_URL", default_value = "postgres://avm:avm@localhost:5432/avm", global = true)]
+    #[arg(
+        long,
+        env = "DATABASE_URL",
+        default_value = "postgres://avm:avm@localhost:5432/avm",
+        global = true
+    )]
     database_url: String,
 
-    #[arg(long, env = "NATS_URL", default_value = "nats://localhost:4222", global = true)]
+    #[arg(
+        long,
+        env = "NATS_URL",
+        default_value = "nats://localhost:4222",
+        global = true
+    )]
     nats_url: String,
 
     #[command(subcommand)]
@@ -43,9 +53,7 @@ enum Command {
         priority: i32,
     },
     /// Show one job.
-    Job {
-        job_id: String,
-    },
+    Job { job_id: String },
     /// List recent jobs for a tenant.
     Jobs {
         #[arg(long, default_value = "")]
@@ -70,14 +78,24 @@ enum Command {
 async fn main() -> anyhow::Result<()> {
     avm_observability::init("avm-cli");
     let cli = Cli::parse();
-    let pool = db::connect(&DbConfig { url: cli.database_url.clone(), ..DbConfig::from_env() }).await?;
+    let pool = db::connect(&DbConfig {
+        url: cli.database_url.clone(),
+        ..DbConfig::from_env()
+    })
+    .await?;
 
     match cli.command {
         Command::Migrate => {
             db::migrate(&pool).await?;
             println!("migrations applied");
         }
-        Command::Submit { tenant, project, agent, payload, priority } => {
+        Command::Submit {
+            tenant,
+            project,
+            agent,
+            payload,
+            priority,
+        } => {
             let scope = if project.is_empty() {
                 Scope::tenant(&tenant)
             } else {
@@ -124,13 +142,24 @@ async fn main() -> anyhow::Result<()> {
                 row.last_error.unwrap_or_default()
             );
         }
-        Command::Jobs { tenant, status, limit } => {
+        Command::Jobs {
+            tenant,
+            status,
+            limit,
+        } => {
             let scope = Scope::tenant(&tenant);
             for row in jobs::list(&pool, &scope, status.as_deref(), limit).await? {
-                println!("{}\t{}\t{}\t{}", row.job_id, row.status, row.agent_id, row.created_at);
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    row.job_id, row.status, row.agent_id, row.created_at
+                );
             }
         }
-        Command::Memories { tenant, project, limit } => {
+        Command::Memories {
+            tenant,
+            project,
+            limit,
+        } => {
             let scope = if project.is_empty() {
                 Scope::tenant(&tenant)
             } else {

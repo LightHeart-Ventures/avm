@@ -8,19 +8,32 @@
 //! JSON-Schema contract, served over `GET /tools/schema` and enforced on
 //! `POST /tools/validate`.
 //!
+//! Agent-to-agent dispatch (`POST /a2a/task`) is authorized before it is
+//! routed: see [`security::validate_a2a_dispatch`].
+//!
 //! Every router built here carries the always-on observability layer from
 //! [`observability`]: a span and a latency observation per request, plus the
 //! `GET /metrics` scrape endpoint and the tenant instrumentation opt-in API.
 
+pub mod a2a;
 pub mod mcp_router;
 pub mod observability;
+pub mod security;
 pub mod tools_api;
 
 use axum::Router;
 
+pub use a2a::{
+    A2AErrorBody, A2ARejection, A2AState, A2ATaskAccepted, A2ATaskRequest, CardResolver,
+    StaticCardRegistry,
+};
 pub use avm_mcp_tools::{ManagedToolSet, ToolSchema, ToolSource};
 pub use mcp_router::{router, McpRouter, ToolCall, ToolResult};
 pub use observability::InstrumentationStore;
+pub use security::{
+    validate_a2a_dispatch, A2ADispatch, AuthError, ScopeError, SecurityAudit, SecurityError,
+    SecurityEvent, TracingAudit,
+};
 
 /// Gateway runtime configuration.
 #[derive(Debug, Clone)]

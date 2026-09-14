@@ -5,10 +5,7 @@
 //! `avm_queue_depth` gauge refreshed from the consumer's pending count.
 
 use async_nats::jetstream::{
-    self,
-    consumer::pull::Config as PullConfig,
-    stream::Config as StreamConfig,
-    Message,
+    self, consumer::pull::Config as PullConfig, stream::Config as StreamConfig, Message,
 };
 use avm_otel::metrics::{self, QUEUE_DEPTH, QUEUE_MESSAGES, QUEUE_MESSAGE_SIZE};
 use avm_otel::TraceContext;

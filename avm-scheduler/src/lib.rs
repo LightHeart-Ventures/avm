@@ -10,6 +10,8 @@
 //! `scheduler.node_selection_score` child, and feeds
 //! `avm_scheduler_job_placement_duration_seconds` labelled by strategy.
 
+pub mod placement;
+
 use std::time::Duration;
 use std::time::Instant;
 
@@ -84,8 +86,13 @@ impl Scheduler {
     /// Push `queued` rows back onto JetStream (at-least-once by design; the
     /// executor is idempotent on `job_id`).
     async fn republish_queued(&self) -> anyhow::Result<usize> {
-        let rows = jobs::list(&self.db, &Scope::system(), Some(jobs::status::QUEUED), self.cfg.batch_size)
-            .await?;
+        let rows = jobs::list(
+            &self.db,
+            &Scope::system(),
+            Some(jobs::status::QUEUED),
+            self.cfg.batch_size,
+        )
+        .await?;
 
         let mut count = 0usize;
         for row in rows {
@@ -148,8 +155,9 @@ impl Scheduler {
     }
 }
 
-/// Quota gate — consulted before a job is admitted.
 pub mod quota {
+    //! Quota gate — consulted before a job is admitted.
+    //!
     //! TODO(avm): read `quotas` + `quota_usage` and reject over-limit tenants.
 
     /// Outcome of a quota check.

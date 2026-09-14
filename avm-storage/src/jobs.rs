@@ -158,7 +158,12 @@ pub async fn cancel(db: &Db, job_id: &str, reason: &str) -> Result<JobRow> {
 }
 
 /// List jobs for a scope, newest first.
-pub async fn list(db: &Db, scope: &Scope, status_filter: Option<&str>, limit: i64) -> Result<Vec<JobRow>> {
+pub async fn list(
+    db: &Db,
+    scope: &Scope,
+    status_filter: Option<&str>,
+    limit: i64,
+) -> Result<Vec<JobRow>> {
     let rows = sqlx::query_as::<_, JobRow>(
         r#"
         SELECT job_id, scope, tenant_id, project_id, agent_id, payload, status,

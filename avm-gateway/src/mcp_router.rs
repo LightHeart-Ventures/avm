@@ -3,7 +3,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::{extract::State, routing::{get, post}, Json, Router};
+use axum::{
+    extract::State,
+    routing::{get, post},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 
 /// An inbound MCP tool invocation.
@@ -46,7 +50,12 @@ pub struct McpRouter {
 impl McpRouter {
     pub fn new() -> Self {
         let mut routes = HashMap::new();
-        for local in ["avm_memory_read", "avm_memory_write", "avm_job_submit", "avm_job_status"] {
+        for local in [
+            "avm_memory_read",
+            "avm_memory_write",
+            "avm_job_submit",
+            "avm_job_status",
+        ] {
             routes.insert(local.to_string(), Route::Local);
         }
         Self { routes }
@@ -54,7 +63,8 @@ impl McpRouter {
 
     /// Register an upstream MCP server for a tool name.
     pub fn register_upstream(&mut self, tool: impl Into<String>, url: impl Into<String>) {
-        self.routes.insert(tool.into(), Route::Upstream { url: url.into() });
+        self.routes
+            .insert(tool.into(), Route::Upstream { url: url.into() });
     }
 
     /// Resolve a tool name.
@@ -133,6 +143,9 @@ mod tests {
     fn upstream_registration_wins() {
         let mut r = McpRouter::new();
         r.register_upstream("atum_list_projects", "https://example.invalid/mcp");
-        assert!(matches!(r.resolve("atum_list_projects"), Some(Route::Upstream { .. })));
+        assert!(matches!(
+            r.resolve("atum_list_projects"),
+            Some(Route::Upstream { .. })
+        ));
     }
 }

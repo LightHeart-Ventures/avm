@@ -1,0 +1,153 @@
+# tenant-isolation.yaml
+#
+# Layer 2 of AVM's defence-in-depth (see IMPLEMENTATION_PLAN.md
+# § "Network Isolation & A2A Security", Phase 2): NATS subject ACLs.
+#
+# THREAT ADDRESSED
+#   A compromised or buggy agent that holds valid NATS connectivity and tries
+#   to subscribe to another tenant's job stream, or publish a forged result
+#   into it. The gateway (Phase 1) never sees this traffic — it is a direct
+#   client-to-broker conversation — so the broker itself has to say no.
+#
+# MODEL
+#   One NATS *account* per tenant. Accounts are the hard isolation primitive
+#   in NATS: subjects do not cross an account boundary at all, so a subject
+#   typo cannot leak between tenants. Inside the account, per-agent users get
+#   narrower subject permissions so one agent cannot impersonate another.
+#
+#   Subject layout (matches .repospec.json):
+#     avm.jobs.<tenant>.<project>        job envelopes
+#     avm.results.<tenant>.<project>     result envelopes
+#     avm.a2a.<tenant>.<project>.<agent> A2A task delivery
+#
+#   The <tenant> token is redundant inside a per-tenant account. It is kept so
+#   that a misconfiguration collapses to "no match" rather than "wrong match",
+#   and so subjects remain self-describing in traces.
+#
+# THIS FILE IS A TEMPLATE. Generate the real thing per tenant — see README.md.
+---
+# ---------------------------------------------------------------------------
+# Operator / system account
+# ---------------------------------------------------------------------------
+operator: AVM
+
+system_account: SYS
+
+accounts:
+  SYS:
+    users:
+      - user: sys
+        password: $SYS_PASSWORD   # replace with nkey/JWT auth in production
+
+  # -------------------------------------------------------------------------
+  # Per-tenant account. Duplicate this block for each tenant.
+  # Replace TENANT_A / t_abc123 throughout.
+  # -------------------------------------------------------------------------
+  TENANT_A:
+    jetstream: enabled
+
+    # Hard ceiling per tenant. A noisy tenant cannot exhaust the cluster.
+    limits:
+      max_connections: 256
+      max_subscriptions: 4096
+      max_payload: 1048576        # 1 MiB
+      max_data: 10737418240       # 10 GiB of JetStream storage
+
+    # No exports and no imports: nothing crosses the account boundary.
+    # Leave these empty. An export here is a cross-tenant channel.
+    exports: []
+    imports: []
+
+    users:
+      # --- executor: consumes jobs, publishes results -----------------------
+      - user: t_abc123.executor
+        password: $TENANT_A_EXECUTOR_PASSWORD
+        permissions:
+          subscribe:
+            allow:
+              - "avm.jobs.t_abc123.>"
+              - "_INBOX.>"
+            deny:
+              - "avm.jobs.*.>"        # belt and braces: no wildcard tenant
+          publish:
+            allow:
+              - "avm.results.t_abc123.>"
+              - "$JS.API.CONSUMER.>"
+              - "$JS.ACK.>"
+            deny:
+              - "avm.jobs.>"          # executors never inject jobs
+              - "avm.results.*.>"
+
+      # --- scheduler: publishes jobs, observes results ----------------------
+      - user: t_abc123.scheduler
+        password: $TENANT_A_SCHEDULER_PASSWORD
+        permissions:
+          subscribe:
+            allow:
+              - "avm.results.t_abc123.>"
+              - "_INBOX.>"
+          publish:
+            allow:
+              - "avm.jobs.t_abc123.>"
+              - "$JS.API.>"
+
+      # --- agent: A2A delivery only ------------------------------------------
+      # Note the agent id in BOTH the subscribe and publish subject. An agent
+      # may only receive on its own A2A subject and may only send via the
+      # gateway's inbox — it cannot publish onto a peer's A2A subject, which
+      # is what makes the gateway the sole A2A path at the queue layer.
+      - user: t_abc123.p_xyz789.agent_planner
+        password: $TENANT_A_AGENT_PLANNER_PASSWORD
+        permissions:
+          subscribe:
+            allow:
+              - "avm.a2a.t_abc123.p_xyz789.agent_planner"
+              - "_INBOX.>"
+            deny:
+              - "avm.a2a.>"           # evaluated after allow; blocks wildcards
+              - "avm.jobs.>"
+              - "avm.results.>"
+          publish:
+            allow:
+              - "avm.gateway.t_abc123.dispatch"   # gateway validates, then routes
+              - "_INBOX.>"
+            deny:
+              - "avm.a2a.>"           # NEVER let an agent write a peer's subject
+              - "avm.jobs.>"
+              - "avm.results.>"
+
+  # -------------------------------------------------------------------------
+  # TENANT_B: copy of the block above with its own ids and secrets.
+  # There is intentionally no shared subject space between the two.
+  # -------------------------------------------------------------------------
+  TENANT_B:
+    jetstream: enabled
+    exports: []
+    imports: []
+    users:
+      - user: t_def456.executor
+        password: $TENANT_B_EXECUTOR_PASSWORD
+        permissions:
+          subscribe:
+            allow: ["avm.jobs.t_def456.>", "_INBOX.>"]
+          publish:
+            allow: ["avm.results.t_def456.>", "$JS.API.CONSUMER.>", "$JS.ACK.>"]
+
+# ---------------------------------------------------------------------------
+# Server-level settings
+# ---------------------------------------------------------------------------
+jetstream:
+  store_dir: /var/lib/nats/jetstream
+  max_memory_store: 2Gb
+  max_file_store: 100Gb
+
+# Refuse anonymous connections outright.
+no_auth_user: ""
+
+# Require TLS so a stolen subject name is useless without a client cert.
+tls:
+  cert_file: /etc/nats/certs/server-cert.pem
+  key_file: /etc/nats/certs/server-key.pem
+  ca_file: /etc/nats/certs/ca.pem
+  verify: true
+  verify_and_map: true
