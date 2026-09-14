@@ -302,6 +302,29 @@ Agent.call(model="claude-3-5-sonnet", messages=[...], tools=[...])
 
 ---
 
+## Execution Layer: Container-Based Isolation
+
+**Each agent job runs inside a dedicated OCI container** (Docker/Podman). This provides full isolation: CPU limits, memory bounds, filesystem sandbox, network isolation, and process limits — preventing one runaway agent from starving others or compromising the host.
+
+### Container Lifecycle
+
+1. **Create** — before job: `podman run --name job_abc123 --cpus=0.6 --memory=512m --pids-limit=10 --network=none --user=1000 job_image:latest`
+2. **Wait** — for container exit or 900s timeout; stream stdout → results, capture exit code
+3. **Destroy** — `podman rm -f job_abc123`; emit cleanup metric
+
+### Agent Image Requirements
+
+- Minimal Alpine-based image (~50 MB)
+- Agent binary reads job from stdin, writes results to stdout
+- Non-root user (uid=1000), no sudo
+- Exit cleanly on SIGTERM
+
+### Future: Kubernetes
+
+Containers → **K8s Job** is 1 pod with 1 container. Executor's `max_concurrency` becomes DaemonSet + HPA. Same agent image works on-prem or cloud.
+
+---
+
 ## Observability (OTel)
 
 ### Instrumentation Points
