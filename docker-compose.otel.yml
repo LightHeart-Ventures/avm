@@ -1,0 +1,58 @@
+# Local observability stack for AVM.
+#
+#   docker compose -f docker-compose.otel.yml up -d
+#   export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+#   cargo run -p avm-gateway
+#
+# Jaeger UI:      http://localhost:16686
+# Prometheus UI:  http://localhost:9090
+# Collector zpages: http://localhost:55679/debug/tracez
+#
+# This file is dev-only. In production the services talk OTLP straight to your
+# vendor endpoint (see docs/observability/otel-setup.md) or to a collector you
+# already run; nothing here is required for AVM to work.
+
+name: avm-otel
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    container_name: avm-otel-collector
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./deploy/otel/collector-config.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC   — AVM services and agents
+      - "4318:4318"   # OTLP HTTP   — browser / curl friendly
+      - "8889:8889"   # Prometheus exporter scrape target
+      - "13133:13133" # health_check
+      - "55679:55679" # zpages
+    depends_on:
+      - jaeger
+    healthcheck:
+      test: ["CMD", "/otelcol-contrib", "--help"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: avm-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686" # UI
+      - "14317:4317"  # OTLP gRPC (remapped; the collector owns 4317)
+
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    container_name: avm-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=24h
+    volumes:
+      - ./deploy/otel/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - otel-collector

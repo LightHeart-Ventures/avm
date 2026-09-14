@@ -223,6 +223,7 @@ dependencies = [
  "anyhow",
  "avm-models",
  "avm-observability",
+ "avm-otel",
  "avm-proto",
  "avm-queue",
  "avm-storage",
@@ -246,6 +247,7 @@ dependencies = [
  "avm-agent",
  "avm-mcp-tools",
  "avm-observability",
+ "avm-otel",
  "avm-proto",
  "avm-storage",
  "axum",
@@ -293,7 +295,20 @@ dependencies = [
 name = "avm-observability"
 version = "0.1.0"
 dependencies = [
+ "avm-otel",
  "thiserror 2.0.20",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "avm-otel"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]
@@ -315,6 +330,7 @@ name = "avm-queue"
 version = "0.1.0"
 dependencies = [
  "async-nats",
+ "avm-otel",
  "avm-proto",
  "futures",
  "serde",
@@ -331,6 +347,7 @@ dependencies = [
  "anyhow",
  "avm-models",
  "avm-observability",
+ "avm-otel",
  "avm-proto",
  "avm-queue",
  "avm-storage",

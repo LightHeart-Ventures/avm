@@ -47,6 +47,7 @@ pub async fn submit_job(
         agent_id: agent_id.to_string(),
         payload: payload.to_string(),
         created_at: Utc::now().to_rfc3339(),
+        ..Default::default()
     };
     state.queue.publish_job(&msg).await?;
 

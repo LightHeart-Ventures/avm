@@ -16,6 +16,7 @@ avm-proto.workspace = true
 avm-mcp-tools.workspace = true
 avm-storage.workspace = true
 avm-observability.workspace = true
+avm-otel.workspace = true
 axum.workspace = true
 tower.workspace = true
 tower-http.workspace = true

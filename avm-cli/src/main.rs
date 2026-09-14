@@ -125,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
                     agent_id: agent,
                     payload,
                     created_at: Utc::now().to_rfc3339(),
+                    ..Default::default()
                 })
                 .await?;
 

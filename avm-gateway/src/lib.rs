@@ -11,10 +11,15 @@
 //! It also carries the agent's A2A surface: Agent Card discovery
 //! ([`a2a_router`]) plus agent-to-agent dispatch (`POST /a2a/task`), which is
 //! authorized before it is routed — see [`security::validate_a2a_dispatch`].
+//!
+//! Every router built here carries the always-on observability layer from
+//! [`observability`]: a span and a latency observation per request, plus the
+//! `GET /metrics` scrape endpoint and the tenant instrumentation opt-in API.
 
 pub mod a2a;
 pub mod a2a_router;
 pub mod mcp_router;
+pub mod observability;
 pub mod security;
 pub mod tools_api;
 
@@ -27,6 +32,7 @@ pub use a2a::{
 pub use a2a_router::CardState;
 pub use avm_mcp_tools::{ManagedToolSet, ToolSchema, ToolSource};
 pub use mcp_router::{router, McpRouter, ToolCall, ToolResult};
+pub use observability::InstrumentationStore;
 pub use security::{
     validate_a2a_dispatch, A2ADispatch, AuthError, ScopeError, SecurityAudit, SecurityError,
     SecurityEvent, TracingAudit,
@@ -46,12 +52,27 @@ impl Default for GatewayConfig {
     }
 }
 
-/// MCP dispatch plus the tool-schema introspection API.
+/// Full gateway router: MCP dispatch, the tool-schema introspection API, and
+/// the observability surface.
 ///
 /// Kept separate from [`mcp_router::router`] so each sub-router owns its own
 /// state and neither has to know about the other.
 pub fn router_with_tools(mcp: McpRouter, tools: ManagedToolSet) -> Router {
-    mcp_router::router(mcp).merge(tools_api::router(tools))
+    router_with_observability(mcp, tools, InstrumentationStore::new())
+}
+
+/// Same as [`router_with_tools`], with an explicit instrumentation store so a
+/// caller (or a test) can seed tenant opt-in rows.
+pub fn router_with_observability(
+    mcp: McpRouter,
+    tools: ManagedToolSet,
+    store: InstrumentationStore,
+) -> Router {
+    mcp_router::router(mcp)
+        .merge(tools_api::router(tools))
+        .merge(observability::router(store))
+        // Outermost layer, so it sees the final status of every route above.
+        .layer(axum::middleware::from_fn(observability::trace_requests))
 }
 
 /// The full gateway application: MCP tool routing, tool schemas, and the A2A
@@ -100,5 +121,12 @@ mod tests {
             A2AState::new(std::sync::Arc::new(StaticCardRegistry::new())),
             CardState::default(),
         );
+    }
+
+    #[test]
+    fn default_router_builds_with_observability() {
+        // Compile-time proof that the metrics + opt-in routes merge cleanly
+        // with the MCP and tool-schema routers (duplicate paths would panic).
+        let _ = default_router();
     }
 }

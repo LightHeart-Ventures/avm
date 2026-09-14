@@ -1,0 +1,29 @@
+# Prometheus scrape config for local AVM development.
+#
+# Two ways to get AVM metrics, both wired here:
+#   1. Direct scrape of each service's built-in `/metrics` endpoint (the
+#      always-available path — works with OTEL export switched off entirely).
+#   2. The collector's Prometheus exporter, which also carries metrics pushed
+#      by agents over OTLP.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: avm-local
+
+scrape_configs:
+  - job_name: avm-services
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - host.docker.internal:8080   # avm-gateway
+        labels:
+          service: avm-gateway
+
+  - job_name: otel-collector
+    static_configs:
+      - targets:
+          - otel-collector:8889
+        labels:
+          source: collector

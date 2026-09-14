@@ -1,0 +1,85 @@
+# OpenTelemetry Collector config for local AVM development.
+#
+# Shape: OTLP in (gRPC + HTTP) -> memory-limited batching -> Jaeger for traces,
+# a Prometheus scrape endpoint for metrics, debug log for everything.
+#
+# The two processors are not optional decoration:
+#   * memory_limiter protects the collector from an agent that floods it — it
+#     starts refusing data instead of OOM-killing the container.
+#   * batch amortises export cost; without it a chatty executor turns every span
+#     into its own network round-trip.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 75
+    spike_limit_percentage: 15
+
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+    send_batch_max_size: 1024
+
+  # Belt-and-braces: AVM never puts payloads in attributes, but a third-party
+  # agent shipping through this collector might. Drop the usual suspects.
+  attributes/scrub:
+    actions:
+      - key: job.payload
+        action: delete
+      - key: http.request.body
+        action: delete
+      - key: authorization
+        action: delete
+      - key: api_key
+        action: delete
+
+exporters:
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    # AVM metric names are already Prometheus-shaped; do not re-mangle them.
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  debug:
+    verbosity: normal
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  zpages:
+    endpoint: 0.0.0.0:55679
+
+service:
+  extensions: [health_check, zpages]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/scrub, batch]
+      exporters: [otlp/jaeger, debug]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus, debug]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/scrub, batch]
+      exporters: [debug]
+
+  telemetry:
+    logs:
+      level: info
