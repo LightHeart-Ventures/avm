@@ -11,9 +11,11 @@ pub mod v1 {
 }
 
 pub mod models;
+pub mod tools;
 pub mod types;
 
 pub use models::{Model, ModelPlacement};
+pub use tools::{ToolCall, ToolCallValidation, ToolDefinition};
 pub use types::{JobMessage, ResultMessage, Scope, ScopeLevel};
 
 /// NATS subject helpers.

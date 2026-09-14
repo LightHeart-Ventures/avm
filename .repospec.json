@@ -16,6 +16,7 @@
     "avm-scheduler",
     "avm-executor",
     "avm-gateway",
+    "avm-mcp-tools",
     "avm-storage",
     "avm-queue",
     "avm-observability",
@@ -37,8 +38,13 @@
     "avm-queue/src/subscriber.rs",
     "avm-executor/src/agent_runner.rs",
     "avm-gateway/src/mcp_router.rs",
+    "avm-gateway/src/tools_api.rs",
+    "avm-mcp-tools/src/schema.rs",
+    "avm-mcp-tools/src/registry.rs",
+    "avm-mcp-tools/src/validate.rs",
     "avm-observability/src/tracing.rs",
     "ARCHITECTURE.md",
+    "IMPLEMENTATION_PLAN.md",
     "DESIGN.md",
     "DEVELOPMENT.md"
   ],
@@ -50,13 +56,15 @@
     "state": "PostgreSQL 16 via sqlx (runtime queries, embedded migrations)",
     "http": "axum (MCP gateway)",
     "observability": "tracing + tracing-subscriber; OTLP export behind the `otlp` feature",
-    "scope_model": "system -> tenant -> project -> agent; readers see own scope + ancestors"
+    "scope_model": "system -> tenant -> project -> agent; readers see own scope + ancestors",
+    "tool_contracts": "JSON-Schema draft 2020-12; generated from Rust arg structs for builtins, ingested from MCP tools/list for upstreams; validated pre-dispatch"
   },
   "services": {
     "avm-server": "gRPC control plane: TenantService, AgentService, JobService, MemoryService",
     "avm-scheduler": "reconciler: re-publish queued jobs, quota gate, reap stale runs, purge expired memories",
     "avm-executor": "JetStream pull consumer + bounded process pool (fork/exec agents)",
-    "avm-gateway": "HTTP MCP tool routing (local handlers + upstream proxy)",
+    "avm-gateway": "HTTP MCP tool routing (local handlers + upstream proxy) + tool-schema introspection (GET /tools/schema, POST /tools/validate)",
+    "avm-mcp-tools": "JSON-Schema tool signatures: generation (schemars), ManagedToolSet registry, runtime validation (jsonschema)",
     "avm-cli": "operator CLI binary `avm` (migrate, submit, job, jobs, memories)"
   },
   "dev": {

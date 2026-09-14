@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 avm-proto.workspace = true
+avm-mcp-tools.workspace = true
 avm-storage.workspace = true
 avm-observability.workspace = true
 axum.workspace = true
