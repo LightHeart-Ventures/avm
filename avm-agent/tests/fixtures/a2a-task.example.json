@@ -1,0 +1,30 @@
+{
+  "schema_version": "avm.a2a/v1",
+  "task_id": "task_9f2c1b7e4a8d4f0b9c3e5a7d1f2b4c60",
+  "source_agent": {
+    "agent_id": "ag_planner",
+    "name": "Planner",
+    "card_url": "http://10.0.1.7:8080/.well-known/agent-card.json"
+  },
+  "target_agent": "ag_pr_reviewer",
+  "instructions": "Review PR #42 in LightHeart-Ventures/avm and report blocking issues.",
+  "context": {
+    "scope": {
+      "level": "project",
+      "tenant_id": "t_lightheart",
+      "project_id": "b_avm",
+      "agent_id": ""
+    },
+    "capability": "review_pull_request",
+    "correlation_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "input": {
+      "repo": "LightHeart-Ventures/avm",
+      "pr_number": 42
+    }
+  },
+  "timeout": {
+    "seconds": 300,
+    "deadline": "2026-01-01T00:05:00Z"
+  },
+  "created_at": "2026-01-01T00:00:00Z"
+}

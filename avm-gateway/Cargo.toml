@@ -11,6 +11,7 @@ name = "avm-gateway"
 path = "src/main.rs"
 
 [dependencies]
+avm-agent.workspace = true
 avm-proto.workspace = true
 avm-mcp-tools.workspace = true
 avm-storage.workspace = true
@@ -25,3 +26,6 @@ anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 clap.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -221,3 +221,101 @@ Called out so the next person doesn't mistake absence for oversight:
   validator is already there when they do.
 - **Cryptographic schema signing.** `fingerprint` answers "did this change?",
   not "who says so?" Trust in an upstream MCP is a connection-level concern.
+
+---
+
+## A2A + Agent Card
+
+**Full spec: [`docs/A2A_AGENT_CARD.md`](docs/A2A_AGENT_CARD.md).** This section
+is the summary; the doc is authoritative.
+
+### Scope
+
+How an AVM agent advertises itself (the **Agent Card**) and how it accepts
+inbound work from another agent (the **A2A task protocol**). Aligned with the
+Linux Foundation A2A convention — the card is served from
+`GET /.well-known/agent-card.json` so third-party A2A clients interoperate
+without special-casing. Schema id: `avm.a2a/v1`.
+
+### Agent Card format
+
+A JSON document describing one agent: identity (`agent_id`, `name`,
+`description`, `version`, `url`), the AVM `scope` it runs under, its backing
+`model_ref`, its advertised `capabilities[]` (each with JSON-Schema
+`input_schema` / `output_schema`), the `mcp_servers[]` it depends on, and its
+inbound `auth_policy`.
+
+`model_ref.uri` is canonical and content-addressable —
+`anthropic://claude-sonnet-4-6` for a hosted model, `oci://…@sha256:…` for a
+self-hosted weight artifact — which is what lets the scheduler key model
+residency off the card.
+
+The example document lives at
+`avm-agent/tests/fixtures/agent-card.example.json` and is asserted
+field-for-field against `AgentCard::example()` in CI, so the published spec
+cannot drift from the code.
+
+### A2A task invocation
+
+`POST /a2a/task` carries an `A2ATask`; the reply is an `A2AResponse`.
+
+- `task_id` is a **caller-generated idempotency key** — a replayed id returns
+  the original response rather than starting a second run, which is what makes
+  retry safe.
+- `context.scope` is a ceiling the callee must not widen: the tenant boundary
+  survives the agent hop.
+- `context.capability` opts the task into JSON-Schema validation at the gateway,
+  so a malformed caller is rejected before any tokens are spent.
+- `timeout.deadline` (absolute, RFC-3339) beats `timeout.seconds` (relative)
+  because an absolute deadline survives queue hops without drifting. Budget only
+  ever shrinks down a fan-out tree.
+- Response carries `usage` (tokens, tool calls, duration, `cost_micro_usd` as an
+  integer — this number ends up on an invoice).
+
+Two execution modes: synchronous (`200` + terminal status) and asynchronous
+(`202` + `accepted`, work enqueued on `avm.jobs.<tenant>.<project>`, caller
+polls). Only the synchronous echo path exists today.
+
+### Discovery / registration
+
+An agent self-registers its card with the control plane at startup
+(`A2AService.RegisterAgentCard`), stored scope-keyed as an upsert on
+`(scope, agent_id)`. Callers resolve `agent_id` → base URL through the control
+plane, fetch the card, match a capability, then submit. Cards are cacheable;
+`wrong_target` and `unknown_capability` are the two errors that mean "your
+cached card is stale — re-fetch".
+
+`source_agent.card_url` is a claim, not proof: the allow-list is checked against
+the *authenticated* identity (mTLS SAN or bearer subject), never the
+self-reported id.
+
+### Error handling / timeouts
+
+Eleven error codes, each with a fixed HTTP status and a derived `retryable`
+flag. The split is enforced by test: 4xx ⇒ caller's fault, never retryable;
+429/5xx ⇒ ours, retryable. A caller needs exactly one bit to implement backoff.
+
+`rejected` (pre-execution failure) is distinct from `failed` (the agent ran and
+failed) — `rejected` guarantees nothing ran, no side effects, safe to treat as a
+no-op. Validation runs cheapest-and-most-diagnostic first: schema → envelope →
+target → capability → auth → input schema → quota → execute.
+
+On timeout: `SIGTERM`, wait, `SIGKILL`, answer `timed_out`/`504`. A task already
+past its deadline on ingest is rejected rather than started.
+
+### What landed
+
+| Piece | State |
+|---|---|
+| `avm-agent` crate: `AgentCard`, `A2ATask`, `A2AResponse` + serde | done |
+| Protobuf mirror in `proto/avm_service.proto` + `service A2AService` | spec only (`protoc` absent locally; `build.rs` stubs the module) |
+| `GET /.well-known/agent-card.json` | test-only — serves the example card |
+| `POST /a2a/task` | test-only — validates the envelope, then echoes |
+| Spec-fixture contract tests (doc ⇄ code) | done |
+
+### Deferred
+
+Auth enforcement (bearer/mTLS), async dispatch onto the job bus plus
+`GET /a2a/task/{id}`, card registration/resolution in the control plane, and
+idempotent replay of a repeated `task_id`. Auth lands **before** dispatch —
+shipping dispatch first would expose an unauthenticated job-submission path.

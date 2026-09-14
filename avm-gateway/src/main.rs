@@ -1,6 +1,6 @@
 //! `avm-gateway` entrypoint.
 
-use avm_gateway::{ManagedToolSet, McpRouter};
+use avm_gateway::{app, A2AState, ManagedToolSet, McpRouter};
 use clap::Parser;
 
 #[derive(Debug, Parser)]
@@ -20,7 +20,7 @@ async fn main() -> anyhow::Result<()> {
     let tools = ManagedToolSet::with_builtins();
     tracing::info!(tools = tools.len(), "tool schema catalog ready");
 
-    let app = avm_gateway::router_with_tools(McpRouter::new(), tools);
+    let app = app(McpRouter::new(), tools, A2AState::default());
     let listener = tokio::net::TcpListener::bind(&args.listen_addr).await?;
 
     tracing::info!(addr = %args.listen_addr, "avm-gateway listening");

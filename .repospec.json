@@ -2,7 +2,7 @@
   "schema": "repospec/v1",
   "name": "avm",
   "version": "0.1.0",
-  "description": "Agent Virtual Machine — multi-tenant Rust runtime for AI agents. gRPC control plane, NATS JetStream job bus, PostgreSQL state, process-pool execution, MCP gateway, OTel instrumentation.",
+  "description": "Agent Virtual Machine — multi-tenant Rust runtime for AI agents. gRPC control plane, NATS JetStream job bus, PostgreSQL state, process-pool execution, MCP gateway, A2A/Agent Card interop, OTel instrumentation.",
   "entrypoints": [
     "avm-server/src/main.rs",
     "avm-scheduler/src/main.rs",
@@ -12,6 +12,7 @@
   ],
   "modules": [
     "avm-proto",
+    "avm-agent",
     "avm-server",
     "avm-scheduler",
     "avm-executor",
@@ -37,7 +38,11 @@
     "avm-queue/src/publisher.rs",
     "avm-queue/src/subscriber.rs",
     "avm-executor/src/agent_runner.rs",
+    "avm-agent/src/card.rs",
+    "avm-agent/src/a2a.rs",
+    "avm-agent/src/discovery.rs",
     "avm-gateway/src/mcp_router.rs",
+    "avm-gateway/src/a2a_router.rs",
     "avm-gateway/src/tools_api.rs",
     "avm-mcp-tools/src/schema.rs",
     "avm-mcp-tools/src/registry.rs",
@@ -46,25 +51,28 @@
     "ARCHITECTURE.md",
     "IMPLEMENTATION_PLAN.md",
     "DESIGN.md",
-    "DEVELOPMENT.md"
+    "DEVELOPMENT.md",
+    "docs/A2A_AGENT_CARD.md"
   ],
   "patterns": {
     "language": "Rust 2021 (MSRV 1.70)",
     "layout": "Cargo workspace, one crate per component",
-    "rpc": "gRPC via tonic + prost (proto/avm_service.proto)",
+    "rpc": "gRPC via tonic + prost (proto/avm_service.proto); protoc optional — build.rs stubs the module when absent",
     "queue": "NATS JetStream (async-nats), subjects avm.jobs.<tenant>.<project> / avm.results.<tenant>.<project>",
     "state": "PostgreSQL 16 via sqlx (runtime queries, embedded migrations)",
-    "http": "axum (MCP gateway)",
+    "http": "axum (MCP gateway + A2A surface)",
+    "a2a": "Agent Card at GET /.well-known/agent-card.json; tasks at POST /a2a/task; schema id avm.a2a/v1 (avm-agent crate)",
     "observability": "tracing + tracing-subscriber; OTLP export behind the `otlp` feature",
     "scope_model": "system -> tenant -> project -> agent; readers see own scope + ancestors",
     "tool_contracts": "JSON-Schema draft 2020-12; generated from Rust arg structs for builtins, ingested from MCP tools/list for upstreams; validated pre-dispatch"
   },
   "services": {
-    "avm-server": "gRPC control plane: TenantService, AgentService, JobService, MemoryService",
+    "avm-server": "gRPC control plane: TenantService, AgentService, JobService, MemoryService, A2AService",
     "avm-scheduler": "reconciler: re-publish queued jobs, quota gate, reap stale runs, purge expired memories",
     "avm-executor": "JetStream pull consumer + bounded process pool (fork/exec agents)",
-    "avm-gateway": "HTTP MCP tool routing (local handlers + upstream proxy) + tool-schema introspection (GET /tools/schema, POST /tools/validate)",
+    "avm-gateway": "HTTP MCP tool routing (local handlers + upstream proxy) + tool-schema introspection (GET /tools/schema, POST /tools/validate) + A2A Agent Card / task endpoints",
     "avm-mcp-tools": "JSON-Schema tool signatures: generation (schemars), ManagedToolSet registry, runtime validation (jsonschema)",
+    "avm-agent": "Agent Card + A2A protocol types (serde); no I/O",
     "avm-cli": "operator CLI binary `avm` (migrate, submit, job, jobs, memories)"
   },
   "dev": {
