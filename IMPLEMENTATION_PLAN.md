@@ -10,6 +10,39 @@ are additive and can land independently.
 > | JSON-Schema tool signatures | tool-introspection spike |
 > | OCI model distribution | model-distribution spike |
 > | Network Isolation & A2A Security | this document (below) |
+> | Architecture Decisions | `docs/adr/` (below) |
+
+---
+
+## Architecture Decisions
+
+Two decisions taken after the spikes below were written **supersede parts of
+them**. The ADRs are authoritative; the spike sections are kept for their
+reasoning and are annotated in place where they now conflict.
+
+| ADR | Decision | Supersedes |
+|---|---|---|
+| [ADR-0001](docs/adr/0001-embedded-sqlite-and-grpc-replace-postgres-and-nats.md) | Per-node embedded **SQLite** (WAL) is the store, the durable **event log** and the transactional outbox. **gRPC** is the only intra-cluster transport. **NATS/JetStream is removed; Postgres is removed.** | Every reference below to NATS subjects/accounts, JetStream, and Postgres as the cluster-wide store |
+| [ADR-0002](docs/adr/0002-container-isolated-agents.md) | Agents run as **OCI containers**, not forked subprocesses. The `AVM_*` env + stdin/stdout job contract is unchanged — only the sandbox changes. | `fork/exec` agent execution in `avm-executor/src/agent_runner.rs`; makes defence layer 3 enforceable rather than conventional |
+
+**Two consequences that need the operator's attention before the port:**
+
+1. **RLS has no SQLite equivalent.** Defence layer 4 below is
+   `migrations/007_add_agent_isolation_rls.sql` — Postgres Row-Level
+   Security. SQLite has no RLS. Layer 4 must become a **process-level hard
+   invariant** in `avm-storage` (every query takes a `Scope`; the connection
+   pool is private to the module and never exported). This changes the
+   Phase 4 row of the phased rollout and must be decided **before** the port,
+   not after. See ADR-0001 § "Migration hazard".
+2. **The agent runtime tier is still open** (`runc` / `runsc` / Firecracker).
+   ADR-0002 recommends abstracting a `Sandbox` trait now and defaulting to
+   rootless `runc`, with the tier as a per-tenant policy knob.
+
+> **Numbering correction:** several passages below cite
+> `migrations/006_add_agent_isolation_rls.sql`. The RLS migration is
+> **`007_add_agent_isolation_rls.sql`** (`006` is `006_create_models.sql`),
+> and migrations live at the repo root `migrations/`, not `avm-storage/migrations/`.
+> Corrected in place.
 
 ---
 
@@ -27,9 +60,9 @@ have failed:
 | # | Layer | Mechanism | Blocks | Phase |
 |---|---|---|---|---|
 | 1 | **API** | `validate_a2a_dispatch()` in `avm-gateway/src/security.rs` | An agent asking the platform to route work to an agent it may not reach | **Phase 1 — this PR** |
-| 2 | **Queue** | Per-tenant NATS accounts + subject ACLs (`docs/nats/`) | Subscribing to another tenant's streams; forging results; writing a peer's A2A subject | Phase 2 |
-| 3 | **Container** | Kubernetes NetworkPolicies (`docs/network-policies/`) | Direct Pod-to-Pod traffic that bypasses the gateway entirely | Phase 3 |
-| 4 | **Data** | Postgres RLS (`migrations/006_add_agent_isolation_rls.sql`) | A missing `WHERE tenant_id = …`, or a leaked DB credential | Phase 4 |
+| 2 | **Transport** | ~~Per-tenant NATS accounts + subject ACLs~~ → **superseded by [ADR-0001](docs/adr/0001-embedded-sqlite-and-grpc-replace-postgres-and-nats.md)**: no broker exists to bypass; gRPC `EventBus` peer identity is mTLS, and scope filtering is server-side | Subscribing to another tenant's stream; forging results | Phase 2 |
+| 3 | **Container** | Kubernetes NetworkPolicies (`docs/network-policies/`) — **now actually binding**, see [ADR-0002](docs/adr/0002-container-isolated-agents.md) | Direct Pod-to-Pod traffic that bypasses the gateway entirely | Phase 3 |
+| 4 | **Data** | Postgres RLS (`migrations/007_add_agent_isolation_rls.sql`) — ⚠️ **no SQLite equivalent**; becomes a process-level invariant in `avm-storage` under [ADR-0001](docs/adr/0001-embedded-sqlite-and-grpc-replace-postgres-and-nats.md) | A missing `WHERE tenant_id = …`, or a leaked DB credential | Phase 4 |
 
 Only layer 1 understands *policy* (trusted peers, intra-project opt-in).
 Layers 2–4 are blunt boundaries whose job is to make the sanctioned path the
@@ -167,7 +200,13 @@ rollout runbook includes a deliberate connectivity test that must fail.
 
 ### 4. Postgres RLS (Phase 4)
 
-`migrations/006_add_agent_isolation_rls.sql` enables and **forces** row-level
+> ⚠️ **Superseded in mechanism by [ADR-0001](docs/adr/0001-embedded-sqlite-and-grpc-replace-postgres-and-nats.md).**
+> The *goal* below — fail-closed tenant isolation that survives a missing
+> `WHERE` predicate — still stands and is non-negotiable. The *mechanism*
+> does not: SQLite has no row-level security. Layer 4 must be re-expressed as
+> a process-level invariant in `avm-storage`. **Decide this before the port.**
+
+`migrations/007_add_agent_isolation_rls.sql` enables and **forces** row-level
 security on the isolated tables, with a policy of the shape:
 
 ```sql
@@ -206,9 +245,9 @@ has a schema rather than being free-form JSON.
 | Phase | Scope | Status | Risk if skipped |
 |---|---|---|---|
 | **1** | Gateway scope validation + Agent Card `A2APolicy` + audit + typed errors | **This PR** | Any agent can dispatch to any other agent |
-| **2** | Per-tenant NATS accounts, subject ACLs, NSC credential lifecycle | Follow-on spike | Gateway is bypassable via a direct NATS publish |
-| **3** | Kubernetes NetworkPolicies rolled out per tenant namespace | Follow-on spike | Gateway is bypassable via a direct Pod dial |
-| **4** | Postgres RLS enabled, `avm_app` / `avm_migrator` roles, `SET LOCAL` in `avm-storage` | Follow-on spike | A single missing predicate leaks rows |
+| **2** | ~~Per-tenant NATS accounts, subject ACLs, NSC credential lifecycle~~ → **dropped**; gRPC `EventBus` with mTLS peer identity + server-side scope filtering ([ADR-0001](docs/adr/0001-embedded-sqlite-and-grpc-replace-postgres-and-nats.md)) | Follow-on spike | A subscriber reads scopes it does not own |
+| **3** | Kubernetes NetworkPolicies rolled out per tenant namespace — **prerequisite: containerised agents** ([ADR-0002](docs/adr/0002-container-isolated-agents.md)); add `allow-gateway-egress-only.yaml` as the default agent netpol | Follow-on spike | Gateway is bypassable via a direct Pod dial |
+| **4** | ⚠️ **Changed by [ADR-0001](docs/adr/0001-embedded-sqlite-and-grpc-replace-postgres-and-nats.md).** ~~Postgres RLS, `avm_app` / `avm_migrator` roles, `SET LOCAL`~~ → scope-typed query API in `avm-storage` with a private connection pool, enforced by API shape + tests | Follow-on spike — **blocks the SQLite port** | A single missing predicate leaks rows, with no database-level backstop |
 
 Deliberate ordering: Phase 1 first because it is the only layer that carries
 policy semantics and the only one that produces an audit trail — it is what
