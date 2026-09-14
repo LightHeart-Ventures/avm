@@ -34,11 +34,15 @@
 
 #![forbid(unsafe_code)]
 
+pub mod artifact;
 pub mod gc;
 pub mod model_ref;
 pub mod oci;
 pub mod store;
 
+pub use artifact::{
+    ArtifactKind, ArtifactRef, ArtifactStore, ResidentArtifact, AGENT_LABEL_PREFIX,
+};
 pub use gc::{GcPolicy, GcReport};
 pub use model_ref::{ModelRef, Residency, DIGEST_ALGO, LABEL_PREFIX, MODEL_URI_SCHEME};
 pub use oci::OciArtifactClient;

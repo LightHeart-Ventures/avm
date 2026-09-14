@@ -1,0 +1,136 @@
+# allow-gateway-egress-only.yaml
+#
+# THE DEFAULT AGENT NETWORK POLICY.
+#
+# Layer 3 of AVM's defence-in-depth (see docs/network-policies/README.md).
+# Apply this to every namespace that runs agent workloads.
+#
+# WHY IT EXISTS NOW AND NOT BEFORE
+#   Under fork/exec, an agent ran inside the executor's own network namespace.
+#   "Agents do not talk to each other directly" was a *convention* — nothing
+#   stopped a process opening a socket to a sibling, and no NetworkPolicy could
+#   select it, because it was not a Pod. With agents running as containers with
+#   their own network namespace and Pod labels, this policy is the thing that
+#   makes the convention binding.
+#
+# EFFECT
+#   Deny ALL egress from agent Pods except:
+#     * DNS (needed to resolve the gateway Service name), and
+#     * the AVM gateway Service on its HTTP port.
+#   Nothing else. Not NATS, not Postgres, not the control plane, not the
+#   internet, not a sibling agent. An agent that needs MCP tools, memory, A2A
+#   dispatch or mid-run event emits reaches them *through the gateway*, where
+#   `validate_a2a_dispatch()` in avm-gateway/src/security.rs already sits.
+#
+#   That single hole is the agent's entire world. It is deliberately the
+#   narrowest posture that still lets an agent do useful work, and it is the
+#   reason the job-scoped gateway bearer token (audience = job_id, TTL = the
+#   job's wall time) is worth minting: the token is the only credential that
+#   can be used from the only endpoint that can be reached.
+#
+# RELATIONSHIP TO block-intra-project-a2a.yaml
+#   `block-intra-project-a2a.yaml` allows the broader platform set (gateway,
+#   control plane, NATS, Postgres) and is the right baseline for workloads that
+#   legitimately speak to the platform directly. THIS file is stricter and is
+#   the default for *agent* Pods. Applying both to the same Pod is additive in
+#   Kubernetes (policies union), so pick one: apply this one to agents, and use
+#   block-intra-project-a2a.yaml only for the platform-adjacent workloads that
+#   genuinely need NATS/Postgres.
+#
+# APPLY
+#   kubectl -n <tenant-namespace> apply -f allow-gateway-egress-only.yaml
+#
+# VERIFY (not optional — an unenforced policy looks identical to an enforced one)
+#   # MUST fail / time out:
+#   kubectl -n <ns> exec deploy/<agent> -- timeout 5 nc -vz <sibling-pod-ip> 8081
+#   kubectl -n <ns> exec deploy/<agent> -- timeout 5 nc -vz nats.avm-system 4222
+#   # MUST succeed:
+#   kubectl -n <ns> exec deploy/<agent> -- \
+#     timeout 5 nc -vz avm-gateway.avm-system.svc.cluster.local 8080
+#
+# PREREQUISITE
+#   A CNI that enforces NetworkPolicy (Calico, Cilium, Antrea…). On a CNI that
+#   ignores NetworkPolicy this file provides zero protection.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: avm-agent-default-deny
+  labels:
+    app.kubernetes.io/part-of: avm
+    avm.io/policy-layer: container
+  annotations:
+    avm.io/policy-role: "default-agent-posture"
+spec:
+  # Every agent Pod. The executor applies these labels to the sandbox.
+  podSelector:
+    matchLabels:
+      avm.io/workload: agent
+  policyTypes:
+    - Egress
+    - Ingress
+  # Empty rule lists = deny everything. The allowance below is the only hole.
+  egress: []
+  ingress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: avm-agent-allow-gateway-egress
+  labels:
+    app.kubernetes.io/part-of: avm
+    avm.io/policy-layer: container
+  annotations:
+    avm.io/policy-role: "the one hole"
+spec:
+  podSelector:
+    matchLabels:
+      avm.io/workload: agent
+  policyTypes:
+    - Egress
+  egress:
+    # --- DNS ---------------------------------------------------------------
+    # Without this the gateway Service name does not resolve and every agent
+    # fails closed. Restricted to the cluster DNS Pods, not 0.0.0.0/0:53.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # --- The AVM gateway ---------------------------------------------------
+    # MCP tool calls, memory reads/writes, A2A dispatch and POST /events all
+    # funnel through here. This is the agent's only route off the Pod.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: avm-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: avm-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# Ingress counterpart: nothing may dial an agent Pod. An agent is reached by
+# the executor handing it a job on stdin, never by an inbound connection.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: avm-agent-deny-all-ingress
+  labels:
+    app.kubernetes.io/part-of: avm
+    avm.io/policy-layer: container
+spec:
+  podSelector:
+    matchLabels:
+      avm.io/workload: agent
+  policyTypes:
+    - Ingress
+  ingress: []

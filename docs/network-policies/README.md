@@ -24,7 +24,46 @@ make the sanctioned path the only reachable path.
 | File | Purpose |
 |---|---|
 | `block-intra-project-a2a.yaml` | Default-deny egress + ingress for agent Pods, then whitelist DNS, gateway, control plane, NATS, Postgres. **Apply this first.** |
+| `allow-gateway-egress-only.yaml` | **The default agent policy.** Deny all egress from an agent Pod except DNS and the gateway service/port. Applied to every agent container by default. |
 | `allow-peer-communication.yaml` | Templated, annotated opt-in exception for one caller → one callee. Same tenant only. |
+
+## The default agent policy: `allow-gateway-egress-only.yaml`
+
+This is the policy every agent workload gets unless an operator deliberately
+widens it. It denies **all** egress from Pods labelled
+`avm.io/workload: agent`, then re-admits exactly two destinations:
+
+1. **DNS** (`kube-system`, UDP/TCP 53) — without it nothing resolves.
+2. **The gateway** (`avm-gateway.avm-system`, TCP 8080) — the single sanctioned
+   way for an agent to reach MCP tools, memory, mid-run event emits, and other
+   agents.
+
+Everything else — other agent Pods, the control plane, NATS, Postgres, the
+public internet, the cloud metadata endpoint — is denied. An agent that wants
+to talk to another agent must ask the gateway, where
+`validate_a2a_dispatch()` applies policy and writes an audit record.
+
+### Why this only became real with containers
+
+Under the previous `fork/exec` executor the agent ran as a child process of
+the executor, inside the executor's Pod and network namespace. "Agents do not
+make direct inter-agent RPC calls" was a **convention** — nothing stopped an
+agent binary from opening a socket to any address the executor could reach,
+and a NetworkPolicy selecting `avm.io/workload: agent` had no Pod of its own
+to select.
+
+With agents running as OCI containers (`avm-executor/src/sandbox.rs`), each
+agent gets its own network namespace and its own labelled workload identity.
+That is what turns this file from documentation into **enforcement**, and it
+is what makes `block-intra-project-a2a.yaml` meaningful: the deny is now
+applied at a boundary the agent cannot step around.
+
+The sandbox reinforces the same posture one layer lower: `NetworkMode` defaults
+to `None` (no network at all) and is only widened to `GatewayOnly` when a
+job-scoped gateway credential is injected. Container-level network mode and
+cluster-level NetworkPolicy are two independent expressions of the same rule —
+if the CNI silently ignores policy, the container still has no route.
+
 
 ## Prerequisites
 

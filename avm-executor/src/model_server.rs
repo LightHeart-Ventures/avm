@@ -13,6 +13,16 @@
 //! (`model.avm.io/<digest>=resident`) so the scheduler can co-schedule agents
 //! that need those weights. Multiple model servers per node are explicitly
 //! allowed — fan-out policy is a separate spike.
+//!
+//! TODO(avm): this module still builds its own `docker run` argv
+//! ([`ModelServerSpec::container_args`]) instead of going through
+//! [`crate::sandbox::Sandbox`]. The trait was shaped to absorb it — a model
+//! server is a [`crate::sandbox::SandboxSpec`] with a published port, a long
+//! (effectively unbounded) wall timeout and a health probe — but the refactor
+//! was deliberately left out of the container-isolated-agents change to keep
+//! that blast radius small. Next step: add `ports` + `health` to `SandboxSpec`,
+//! replace `container_args()` with `SandboxSpec::run_args()`, and keep
+//! `node_labels()` as the post-health residency publisher.
 
 use std::collections::BTreeMap;
 
