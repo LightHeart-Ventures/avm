@@ -10,8 +10,10 @@ pub mod v1 {
     include!(concat!(env!("OUT_DIR"), "/avm.v1.rs"));
 }
 
+pub mod tools;
 pub mod types;
 
+pub use tools::{ToolCall, ToolCallValidation, ToolDefinition};
 pub use types::{JobMessage, ResultMessage, Scope, ScopeLevel};
 
 /// NATS subject helpers.
