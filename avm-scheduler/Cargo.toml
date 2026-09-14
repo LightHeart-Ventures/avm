@@ -16,6 +16,7 @@ avm-models.workspace = true
 avm-storage.workspace = true
 avm-queue.workspace = true
 avm-observability.workspace = true
+avm-otel.workspace = true
 tokio.workspace = true
 tonic.workspace = true
 serde.workspace = true

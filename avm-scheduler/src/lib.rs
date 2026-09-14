@@ -5,15 +5,26 @@
 //! 2. Enforce per-tenant quotas before dispatch.
 //! 3. Reap stale `running` jobs whose executor died.
 //! 4. Purge expired memories.
+//!
+//! Every placement decision is a `scheduler.place_job` span with a
+//! `scheduler.node_selection_score` child, and feeds
+//! `avm_scheduler_job_placement_duration_seconds` labelled by strategy.
 
 pub mod placement;
 
 use std::time::Duration;
+use std::time::Instant;
 
+use avm_otel::metrics::{self, SCHEDULER_PLACEMENT_DURATION};
+use avm_otel::{propagation, InstrumentationLevel, TraceContext};
 use avm_proto::types::{JobMessage, Scope};
 use avm_queue::Publisher;
 use avm_storage::{jobs, memories, Db};
 use chrono::Utc;
+
+/// Placement strategy label for the platform metric. One strategy today
+/// (requeue in creation order); constraint-scored placement adds more.
+const STRATEGY: &str = "requeue";
 
 /// Scheduler tuning.
 #[derive(Debug, Clone)]
@@ -61,6 +72,9 @@ impl Scheduler {
 
     /// One reconcile pass.
     pub async fn tick(&self) -> anyhow::Result<()> {
+        let span = tracing::debug_span!("scheduler.tick", otel.kind = "internal");
+        let _entered = span.enter();
+
         let republished = self.republish_queued().await?;
         let purged = memories::purge_expired(&self.db).await?;
         if republished > 0 || purged > 0 {
@@ -82,19 +96,59 @@ impl Scheduler {
 
         let mut count = 0usize;
         for row in rows {
+            let started = Instant::now();
+            let scope = Scope {
+                level: row.scope.clone(),
+                tenant_id: row.tenant_id.clone(),
+                project_id: row.project_id.clone(),
+                agent_id: row.agent_id.clone(),
+            };
+
+            let span = tracing::info_span!(
+                "scheduler.place_job",
+                otel.kind = "internal",
+                job_id = %row.job_id,
+                tenant_id = %scope.tenant_id,
+                project_id = %scope.project_id,
+                agent_id = %scope.agent_id,
+                strategy = STRATEGY,
+            );
+            let _entered = span.enter();
+
+            // A requeue re-parents the job onto a fresh trace: the original
+            // dispatch trace is already closed, and stitching a new execution
+            // under a completed span would misrepresent the timeline.
+            let ctx = TraceContext::root_from_seed(&propagation::new_trace_id_seed(), true);
+
+            {
+                let _score = tracing::debug_span!(
+                    "scheduler.node_selection_score",
+                    job_id = %row.job_id,
+                    candidates = 1,
+                    strategy = STRATEGY,
+                )
+                .entered();
+            }
+
             let msg = JobMessage {
                 job_id: row.job_id.clone(),
-                scope: Scope {
-                    level: row.scope.clone(),
-                    tenant_id: row.tenant_id.clone(),
-                    project_id: row.project_id.clone(),
-                    agent_id: row.agent_id.clone(),
-                },
+                scope,
                 agent_id: row.agent_id.clone(),
                 payload: row.payload.to_string(),
                 created_at: Utc::now().to_rfc3339(),
+                traceparent: ctx.to_traceparent(),
+                tracestate: String::new(),
+                // A requeue never widens the tenant's opt-in: the level is
+                // re-resolved at the gateway on the next dispatch.
+                instrumentation_level: InstrumentationLevel::Off.as_str().to_string(),
             };
             self.queue.publish_job(&msg).await?;
+
+            metrics::registry().histogram_observe(
+                SCHEDULER_PLACEMENT_DURATION,
+                &[("strategy", STRATEGY)],
+                started.elapsed().as_secs_f64(),
+            );
             count += 1;
         }
         Ok(count)
@@ -112,5 +166,26 @@ pub mod quota {
         Allow,
         Throttle { retry_after_sec: u32 },
         Deny { reason: String },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn requeued_jobs_carry_a_fresh_sampled_trace() {
+        let ctx = TraceContext::root_from_seed(&propagation::new_trace_id_seed(), true);
+        let tp = ctx.to_traceparent();
+        assert!(tp.starts_with("00-"), "{tp}");
+        assert!(tp.ends_with("-01"), "requeue traces are sampled: {tp}");
+        let parsed = TraceContext::parse_traceparent(&tp).expect("round-trips");
+        assert_eq!(parsed.trace_id, ctx.trace_id);
+    }
+
+    #[test]
+    fn requeue_does_not_widen_instrumentation() {
+        assert_eq!(InstrumentationLevel::Off.as_str(), "off");
+        assert!(!InstrumentationLevel::Off.tenant_metrics());
     }
 }

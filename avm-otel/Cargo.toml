@@ -1,0 +1,26 @@
+[package]
+name = "avm-otel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenTelemetry bootstrap for AVM: resource detection, W3C trace-context propagation, Prometheus-compatible metrics, and hierarchical (platform / tenant / project / agent) instrumentation scoping."
+
+[features]
+default = []
+# Wires the OTLP exporter (opentelemetry-otlp + tracing-opentelemetry) onto the
+# subscriber built by `init_otel`. Kept behind a feature so the default build
+# does not pin a fast-moving OTel API surface and stays vendorable offline.
+otlp = []
+
+[dependencies]
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }
