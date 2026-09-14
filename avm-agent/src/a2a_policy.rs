@@ -110,7 +110,7 @@ impl A2APolicy {
 ///
 /// Mirrors `avm.v1.Scope` from `proto/avm_service.proto` minus the `level`
 /// discriminator, because an A2A endpoint is always at agent level.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentScope {
     pub tenant_id: String,
     pub project_id: String,
@@ -143,44 +143,10 @@ impl AgentScope {
     }
 }
 
-/// Minimal Agent Card — the security-relevant subset.
-///
-/// The A2A + Agent Card spike owns the full card (capabilities, `mcp_servers`,
-/// `model_ref`, auth policy, …). This struct is `#[serde(default)]` on the
-/// policy field and uses `#[serde(flatten)]`-friendly plain fields so the two
-/// definitions merge without a schema break: the spike's card only needs to
-/// gain `pub a2a_policy: A2APolicy` and reuse the types above.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentCard {
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub version: String,
-    /// Where this agent lives — required for tenant/project boundary checks.
-    pub scope: AgentScope,
-    /// Who may dispatch A2A work to this agent. Defaults to deny-all.
-    #[serde(default)]
-    pub a2a_policy: A2APolicy,
-}
-
-impl AgentCard {
-    /// A card with the closed default policy.
-    pub fn new(name: impl Into<String>, scope: AgentScope) -> Self {
-        Self {
-            name: name.into(),
-            description: String::new(),
-            version: String::new(),
-            scope,
-            a2a_policy: A2APolicy::default(),
-        }
-    }
-
-    pub fn with_policy(mut self, policy: A2APolicy) -> Self {
-        self.a2a_policy = policy;
-        self
-    }
-}
+// The Agent Card itself lives in [`crate::card`]: `AgentCard` carries this
+// policy as its `a2a_policy` field, so there is exactly one card type on the
+// wire. `AgentCard::new(name, scope)` builds a card with the closed default
+// policy, and `AgentCard::with_policy` attaches a configured one.
 
 #[cfg(test)]
 mod tests {
@@ -204,13 +170,10 @@ mod tests {
     }
 
     #[test]
-    fn card_without_policy_field_deserializes_to_deny_all() {
-        let raw = r#"{
-            "name": "planner",
-            "scope": { "tenant_id": "t1", "project_id": "p1", "agent_id": "a1" }
-        }"#;
-        let card: AgentCard = serde_json::from_str(raw).unwrap();
+    fn card_defaults_to_deny_all() {
+        let card = crate::card::AgentCard::new("planner", AgentScope::new("t1", "p1", "a1"));
         assert_eq!(card.a2a_policy, A2APolicy::deny_all());
+        assert_eq!(card.agent_id, "a1");
     }
 
     #[test]

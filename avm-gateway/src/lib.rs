@@ -8,14 +8,16 @@
 //! JSON-Schema contract, served over `GET /tools/schema` and enforced on
 //! `POST /tools/validate`.
 //!
-//! Agent-to-agent dispatch (`POST /a2a/task`) is authorized before it is
-//! routed: see [`security::validate_a2a_dispatch`].
+//! It also carries the agent's A2A surface: Agent Card discovery
+//! ([`a2a_router`]) plus agent-to-agent dispatch (`POST /a2a/task`), which is
+//! authorized before it is routed — see [`security::validate_a2a_dispatch`].
 //!
 //! Every router built here carries the always-on observability layer from
 //! [`observability`]: a span and a latency observation per request, plus the
 //! `GET /metrics` scrape endpoint and the tenant instrumentation opt-in API.
 
 pub mod a2a;
+pub mod a2a_router;
 pub mod mcp_router;
 pub mod observability;
 pub mod security;
@@ -27,6 +29,7 @@ pub use a2a::{
     A2AErrorBody, A2ARejection, A2AState, A2ATaskAccepted, A2ATaskRequest, CardResolver,
     StaticCardRegistry,
 };
+pub use a2a_router::CardState;
 pub use avm_mcp_tools::{ManagedToolSet, ToolSchema, ToolSource};
 pub use mcp_router::{router, McpRouter, ToolCall, ToolResult};
 pub use observability::InstrumentationStore;
@@ -72,6 +75,19 @@ pub fn router_with_observability(
         .layer(axum::middleware::from_fn(observability::trace_requests))
 }
 
+/// The full gateway application: MCP tool routing, tool schemas, and the A2A
+/// surface (Agent Card discovery + inbound tasks).
+pub fn app(
+    mcp: McpRouter,
+    tools: ManagedToolSet,
+    a2a: A2AState,
+    cards: CardState,
+) -> Router {
+    router_with_tools(mcp, tools)
+        .merge(a2a::router(a2a))
+        .merge(a2a_router::router(cards))
+}
+
 /// Default wiring: the gateway's local routes plus their generated schemas.
 ///
 /// Upstream MCP servers are layered on at connect time via
@@ -95,6 +111,16 @@ mod tests {
                 "local route `{name}` has no published JSON-Schema signature"
             );
         }
+    }
+
+    #[test]
+    fn app_merges_all_surfaces() {
+        let _ = app(
+            McpRouter::new(),
+            ManagedToolSet::with_builtins(),
+            A2AState::new(std::sync::Arc::new(StaticCardRegistry::new())),
+            CardState::default(),
+        );
     }
 
     #[test]

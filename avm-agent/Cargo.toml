@@ -7,6 +7,9 @@ license.workspace = true
 description = "AVM agent model: Agent Card, A2A task envelopes and the A2A trust policy."
 
 [dependencies]
+avm-proto.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
 thiserror.workspace = true

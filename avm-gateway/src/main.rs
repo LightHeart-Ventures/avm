@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use avm_gateway::{a2a, A2AState, ManagedToolSet, McpRouter, StaticCardRegistry};
+use avm_gateway::{app, A2AState, CardState, ManagedToolSet, McpRouter, StaticCardRegistry};
 use clap::Parser;
 
 #[derive(Debug, Parser)]
@@ -30,8 +30,12 @@ async fn main() -> anyhow::Result<()> {
     // rather than waved through (see `a2a::A2AState::authorize`).
     let cards = Arc::new(StaticCardRegistry::new());
 
-    let app = avm_gateway::router_with_tools(McpRouter::new(), tools)
-        .merge(a2a::router(A2AState::new(cards)));
+    let app = app(
+        McpRouter::new(),
+        tools,
+        A2AState::new(cards),
+        CardState::default(),
+    );
     let listener = tokio::net::TcpListener::bind(&args.listen_addr).await?;
 
     tracing::info!(
