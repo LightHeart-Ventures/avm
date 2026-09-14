@@ -21,9 +21,9 @@
 | Component | Responsibility |
 |---------|---|
 | **Job Scheduler** | Queue + priority; route to process pool; enforce quotas |
-| **Process Pool** | Spawn agent processes; resource isolation (cgroups/ulimit) |
+| **Agent Sandbox** | Run agents as **OCI containers**; limits from the runtime spec ([ADR-0002](docs/adr/0002-container-isolated-agents.md)) |
 | **MCP Gateway** | Route tool calls (local + remote); agent-to-agent invocation |
-| **Memory Store** | Embedded key-value (RocksDB or SQLite); scope-based access control |
+| **Memory Store** | Embedded **SQLite** (WAL); scope-based access control enforced in-process ([ADR-0001](docs/adr/0001-embedded-sqlite-and-grpc-replace-postgres-and-nats.md)) |
 | **Secrets Manager** | Per-scope encrypted credential injection |
 | **AI Provider Router** | Multiplex to Claude/GPT-4/Ollama; cost tracking |
 | **OTel Collector** | In-process span/metric buffering → Prometheus/Jaeger |
@@ -50,7 +50,7 @@ System (AVM infra + platform agents)
 ### Schema
 
 ```
-Memories (RocksDB or SQLite)
+Memories + event log (embedded SQLite, WAL)
   PK: (scope, scope_id, memory_id)
   - scope: "system" | "tenant" | "project" | "agent"
   - scope_id: "" | "t_acme" | "b_payments" | "ag_xyz"
@@ -132,6 +132,11 @@ Agent Memory (scope="agent", scope_id="ag_pr_reviewer")
 ---
 
 ## Process Pool Execution
+
+> **Superseded by [ADR-0002](docs/adr/0002-container-isolated-agents.md).**
+> Agents run as OCI containers. The job contract described below
+> (`AVM_*` env, payload on stdin, result on stdout) is **unchanged** — it is
+> delivered as container env and PID-1 stdio instead of via `fork`/`exec`.
 
 ### Agent Startup
 
@@ -355,7 +360,7 @@ bare metal / VM
   ├─ Scheduler + Job Queue
   ├─ Process Pool (up to 32 agents concurrently)
   ├─ MCP Gateway
-  ├─ Memory Store (RocksDB / SQLite)
+  ├─ Memory Store + event log (embedded SQLite, WAL)
   ├─ Secrets Manager
   ├─ OTel Collector (buffered)
   └─ Prometheus Exporter (port 9091)
@@ -364,10 +369,10 @@ bare metal / VM
 ### Scale-Out (Future)
 
 - Multiple AVM nodes share:
-  - Central state store (PostgreSQL / DynamoDB)
-  - Distributed job queue (Redis / NATS)
+  - ~~Central state store (PostgreSQL / DynamoDB)~~ → per-node SQLite ([ADR-0001](docs/adr/0001-embedded-sqlite-and-grpc-replace-postgres-and-nats.md))
+  - ~~Distributed job queue (Redis / NATS)~~ → gRPC `EventBus` over the node-local log
   - Shared secrets manager (Vault / AWS Secrets Manager)
-  - Shared memory store (PostgreSQL)
+  - ~~Shared memory store (PostgreSQL)~~ → gateway-side fan-in across nodes
 - Scheduler distributes jobs across nodes
 - OTel → Central Prometheus/Jaeger
 
@@ -389,7 +394,7 @@ avm/
 │  │  └─ main.rs
 │  ├─ avm-scheduler/      # job scheduler + queue
 │  ├─ avm-executor/       # process pool + agent execution
-│  │  ├─ agent_runner.rs  # fork + exec
+│  │  ├─ agent_runner.rs  # OCI container (ADR-0002; fork+exec superseded)
 │  │  ├─ cgroup.rs        # resource isolation
 │  │  └─ main.rs
 │  ├─ avm-gateway/        # MCP gateway
@@ -397,7 +402,7 @@ avm/
 │  │  ├─ ai_provider_router.rs
 │  │  └─ secrets_injector.rs
 │  ├─ avm-memory/         # embedded store
-│  │  ├─ store.rs         # RocksDB/SQLite wrapper
+│  │  ├─ store.rs         # SQLite wrapper (scope-enforced)
 │  │  ├─ scope_acl.rs     # access control
 │  │  └─ expiration.rs    # TTL enforcement
 │  ├─ avm-observability/  # OTel instrumentation
@@ -475,7 +480,7 @@ proptest = "1.5"
    - Connect to encrypted store
 
 3. Initialize memory store
-   - Open RocksDB at DATA_DIR/memories
+   - Open SQLite (WAL) at DATA_DIR/avm.db
    - Run schema migrations
    - Load scope ACLs
 
@@ -523,7 +528,24 @@ proptest = "1.5"
 
 ## Open Questions
 
-1. **Memory store backend**: RocksDB (embedded, fast, no ops) or SQLite (easier backups, ACID)? Start with SQLite, migrate to RocksDB if perf matters.
-2. **Process pool or container pool**: Start with process pool (simpler cgroups isolation). Container pool (Podman/runc) is future work.
-3. **Secrets encryption**: Use AES-256-GCM via sodiumoxide, or delegate to system keyring? Start with in-process, plan for Vault later.
-4. **Distributed mode**: Single-machine first, plan for PostgreSQL state share + Redis job queue in M11+.
+1. ~~**Memory store backend**: RocksDB (embedded, fast, no ops) or SQLite (easier backups, ACID)?~~
+   **CLOSED — see [ADR-0001](docs/adr/0001-embedded-sqlite-and-grpc-replace-postgres-and-nats.md).**
+   Per-node embedded **SQLite in WAL mode**, and the scope is wider than this
+   question assumed: SQLite is not only the memory store, it is the node's
+   durable **event log and transactional outbox**, replacing the shared
+   Postgres instance entirely. RocksDB is rejected — no SQL, no ad-hoc
+   inspection, weaker migration story.
+2. ~~**Process pool or container pool**: Start with process pool (simpler cgroups isolation).~~
+   **CLOSED — see [ADR-0002](docs/adr/0002-container-isolated-agents.md).**
+   Agents run in **containers**. The deciding factor was not resource
+   isolation but network isolation: a forked subprocess shares the executor's
+   network namespace, so the NetworkPolicies in `docs/network-policies/`
+   cannot bind to it. The runtime *tier* (`runc` / `runsc` / Firecracker) is
+   deliberately left open behind a `Sandbox` trait — see that ADR.
+3. **Secrets encryption**: Use AES-256-GCM via sodiumoxide, or delegate to system keyring? Start with in-process, plan for Vault later. **(Still open.)**
+4. ~~**Distributed mode**: Single-machine first, plan for PostgreSQL state share + Redis job queue in M11+.~~
+   **CLOSED — see [ADR-0001](docs/adr/0001-embedded-sqlite-and-grpc-replace-postgres-and-nats.md).**
+   There is no shared state store and no broker. State is per-node SQLite;
+   the transport is **gRPC only** (`EventBus.Subscribe(from_seq)`), with
+   cross-cluster federation over a bidirectional gRPC `Bridge`. Note the
+   trade this accepts: ordering is per-node, not global.
