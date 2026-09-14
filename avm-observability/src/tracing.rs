@@ -1,12 +1,14 @@
-//! Tracing + (optional) OpenTelemetry setup.
+//! Legacy tracing bootstrap, delegating to [`avm_otel`].
 //!
-//! Default build installs a structured `tracing-subscriber` stack driven by
-//! `RUST_LOG`. Building with `--features otlp` is the hook where the OTLP
-//! pipeline gets wired to the collector at `OTEL_EXPORTER_OTLP_ENDPOINT`.
+//! Kept so existing call sites (`avm_observability::init("avm-gateway")`) keep
+//! compiling while services migrate to `avm_otel::init_otel`.
 
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use avm_otel::OtelConfig;
 
 /// Telemetry knobs, normally derived from the environment.
+///
+/// Retained for backward compatibility; internally this is converted into an
+/// [`avm_otel::OtelConfig`].
 #[derive(Debug, Clone)]
 pub struct TelemetryConfig {
     /// `service.name` resource attribute.
@@ -21,11 +23,13 @@ pub struct TelemetryConfig {
 
 impl TelemetryConfig {
     pub fn new(service_name: impl Into<String>) -> Self {
+        let service_name = service_name.into();
+        let cfg = OtelConfig::from_env(&service_name, env!("CARGO_PKG_VERSION"));
         Self {
-            service_name: service_name.into(),
-            default_filter: "info,avm=debug".to_string(),
-            json: std::env::var("AVM_LOG_FORMAT").as_deref() == Ok("json"),
-            otlp_endpoint: std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok(),
+            service_name,
+            default_filter: cfg.default_filter,
+            json: cfg.json_logs,
+            otlp_endpoint: cfg.endpoint,
         }
     }
 }
@@ -38,47 +42,9 @@ pub fn init(service_name: &str) {
 
 /// Install the global subscriber from an explicit config.
 pub fn init_with(cfg: TelemetryConfig) {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(cfg.default_filter.clone()));
-
-    let registry = tracing_subscriber::registry().with(filter);
-
-    let installed = if cfg.json {
-        registry
-            .with(fmt::layer().json().with_current_span(true))
-            .try_init()
-            .is_ok()
-    } else {
-        registry
-            .with(fmt::layer().with_target(true))
-            .try_init()
-            .is_ok()
-    };
-
-    if installed {
-        tracing::info!(
-            service.name = %cfg.service_name,
-            otlp_endpoint = ?cfg.otlp_endpoint,
-            otlp_enabled = cfg!(feature = "otlp"),
-            "telemetry initialised"
-        );
-    }
-
-    #[cfg(feature = "otlp")]
-    {
-        // TODO(avm): wire opentelemetry_sdk TracerProvider + opentelemetry-otlp
-        // exporter here and layer `tracing_opentelemetry::layer()` onto the
-        // registry above. Pinned behind a feature so the default build does not
-        // depend on a fast-moving OTel API surface.
-        tracing::warn!("otlp feature enabled but exporter wiring is not implemented yet");
-    }
-}
-
-/// Standard span field names, so every crate tags traces the same way.
-pub mod fields {
-    pub const JOB_ID: &str = "avm.job_id";
-    pub const AGENT_ID: &str = "avm.agent_id";
-    pub const TENANT_ID: &str = "avm.tenant_id";
-    pub const PROJECT_ID: &str = "avm.project_id";
-    pub const SCOPE: &str = "avm.scope";
+    let mut otel = OtelConfig::from_env(&cfg.service_name, env!("CARGO_PKG_VERSION"));
+    otel.json_logs = cfg.json;
+    otel.default_filter = cfg.default_filter.clone();
+    otel.endpoint = cfg.otlp_endpoint.clone();
+    let _ = avm_otel::init_otel_with(otel);
 }

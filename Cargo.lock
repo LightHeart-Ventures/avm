@@ -262,7 +262,20 @@ dependencies = [
 name = "avm-observability"
 version = "0.1.0"
 dependencies = [
+ "avm-otel",
  "thiserror 2.0.20",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "avm-otel"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]

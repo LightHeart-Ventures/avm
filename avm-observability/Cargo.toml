@@ -4,15 +4,15 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Tracing/metrics bootstrap for AVM (structured logs now, OTLP export behind the `otlp` feature)."
+description = "Compatibility shim over `avm-otel` (kept so legacy `avm_observability::init` call sites keep working)."
 
 [features]
 default = []
-# Enables the OTLP exporter wiring. Kept off by default so the workspace
-# builds without an opentelemetry toolchain pinned to a specific API version.
-otlp = []
+# Forwarded to `avm-otel`. Kept so `--features otlp` still resolves here.
+otlp = ["avm-otel/otlp"]
 
 [dependencies]
+avm-otel.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 thiserror.workspace = true

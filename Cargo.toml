@@ -10,6 +10,7 @@ members = [
     "avm-storage",
     "avm-queue",
     "avm-observability",
+    "avm-otel",
     "avm-cli",
 ]
 
@@ -27,6 +28,7 @@ avm-proto = { path = "avm-proto" }
 avm-storage = { path = "avm-storage" }
 avm-queue = { path = "avm-queue" }
 avm-observability = { path = "avm-observability" }
+avm-otel = { path = "avm-otel" }
 avm-mcp-tools = { path = "avm-mcp-tools" }
 
 # --- async runtime / rpc ---
