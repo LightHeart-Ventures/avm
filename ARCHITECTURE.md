@@ -16,6 +16,42 @@
 | `WorkflowService` | Workflow definition, scheduling, execution |
 | `MemoryService` | Read/write memories (system/tenant/project/agent scoped) |
 
+### Distributed Coordinator (Raft Consensus)
+
+**Multi-host deployments use **Raft consensus** for automatic coordinator election.** Each AVM runtime is a Raft node; the elected leader acts as the **Coordinator** — the single source of truth for:
+
+| Responsibility |
+|---|
+| **Agent Registry** — where each agent lives (agent_id → host_id + gRPC addr) |
+| **Cross-host Routing** — agent-to-agent RPC forwarding via coordinator |
+| **Global Memory** — distributed KV store for shared agent state |
+| **Workload Placement** — which host runs which new job (round-robin, capacity-aware) |
+| **Status Collection** — aggregates telemetry from all runtimes |
+
+**Raft Implementation:**
+- Each runtime runs a Raft node (embedded, ~1000 LOC)
+- Consensus on every write: agent registration, job placement, memory updates
+- **State Machine:**
+  ```
+  type CoordinatorState {
+    agent_registry: HashMap<agent_id, (host_id, gRPC_addr)>,
+    memory_store: HashMap<(scope, scope_id, memory_id), Memory>,
+    job_queue: PriorityQueue<Job>,  // or each host manages its own, coordinator just tracks capacity
+    host_status: HashMap<host_id, (last_heartbeat, capacity_free, running_agents)>,
+  }
+  ```
+- **Heartbeat:** each runtime → coordinator every 5s (or pull-based polling)
+- **Leader election:** timeout-triggered new election if leader fails
+
+**Agent-to-Agent Comms (Example):**
+1. Agent on `host-1` calls `invoke_agent(agent_id="ag_task_executor", task=...)`
+2. `host-1` runtime → Coordinator: "Where is `ag_task_executor`?"
+3. Coordinator responds: "On `host-2` at `grpc://host-2:50051`"
+4. `host-1` runtime connects directly to `host-2` runtime's gRPC server
+5. `host-2` routes to its local agent process pool
+
+**Fallback:** if coordinator is unreachable, runtimes can cache the agent registry locally and use stale data (eventual consistency); writes block until quorum is reachable.
+
 ### Data Plane
 
 | Component | Responsibility |
