@@ -7,14 +7,27 @@
 //! can reach is registered in an [`avm_mcp_tools::ManagedToolSet`] with a
 //! JSON-Schema contract, served over `GET /tools/schema` and enforced on
 //! `POST /tools/validate`.
+//!
+//! Agent-to-agent dispatch (`POST /a2a/task`) is authorized before it is
+//! routed: see [`security::validate_a2a_dispatch`].
 
+pub mod a2a;
 pub mod mcp_router;
+pub mod security;
 pub mod tools_api;
 
 use axum::Router;
 
+pub use a2a::{
+    A2AErrorBody, A2ARejection, A2AState, A2ATaskAccepted, A2ATaskRequest, CardResolver,
+    StaticCardRegistry,
+};
 pub use avm_mcp_tools::{ManagedToolSet, ToolSchema, ToolSource};
 pub use mcp_router::{router, McpRouter, ToolCall, ToolResult};
+pub use security::{
+    validate_a2a_dispatch, A2ADispatch, AuthError, ScopeError, SecurityAudit, SecurityError,
+    SecurityEvent, TracingAudit,
+};
 
 /// Gateway runtime configuration.
 #[derive(Debug, Clone)]

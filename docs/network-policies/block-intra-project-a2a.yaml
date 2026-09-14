@@ -1,0 +1,151 @@
+# block-intra-project-a2a.yaml
+#
+# Layer 3 of AVM's defence-in-depth (see IMPLEMENTATION_PLAN.md
+# § "Network Isolation & A2A Security", Phase 3).
+#
+# THREAT ADDRESSED
+#   An agent container that ignores the gateway entirely and opens a raw
+#   socket to a sibling agent Pod in the same project/namespace. The gateway
+#   check (Phase 1) is only binding on traffic that goes *through* the
+#   gateway; this policy makes the direct path physically unavailable.
+#
+# EFFECT
+#   Default-deny all egress from agent Pods, then whitelist exactly the
+#   platform services an agent legitimately needs: DNS, the AVM gateway, the
+#   AVM control plane, NATS and Postgres. Pod-to-Pod traffic between agents is
+#   dropped by the CNI.
+#
+# APPLY
+#   kubectl -n <tenant-namespace> apply -f block-intra-project-a2a.yaml
+#
+# PREREQUISITE
+#   A CNI that enforces NetworkPolicy (Calico, Cilium, Antrea…). On a CNI that
+#   ignores NetworkPolicy this file is a no-op and provides zero protection —
+#   verify with a deliberate connectivity test before relying on it.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: avm-agent-default-deny-egress
+  labels:
+    app.kubernetes.io/part-of: avm
+    avm.io/policy-layer: container
+spec:
+  # Applies to every agent workload. Agents are labelled by the executor.
+  podSelector:
+    matchLabels:
+      avm.io/workload: agent
+  policyTypes:
+    - Egress
+    - Ingress
+  # Empty rule lists = deny everything. Allowances live in the policy below
+  # and in allow-peer-communication.yaml.
+  egress: []
+  ingress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: avm-agent-allow-platform-egress
+  labels:
+    app.kubernetes.io/part-of: avm
+    avm.io/policy-layer: container
+spec:
+  podSelector:
+    matchLabels:
+      avm.io/workload: agent
+  policyTypes:
+    - Egress
+  egress:
+    # --- DNS -------------------------------------------------------------
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # --- AVM gateway (the ONLY sanctioned path to another agent) ---------
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: avm-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: avm-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+
+    # --- AVM control plane (gRPC) ----------------------------------------
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: avm-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: avm-server
+      ports:
+        - protocol: TCP
+          port: 50051
+
+    # --- NATS JetStream ---------------------------------------------------
+    # Subject-level tenant isolation is enforced by the per-tenant credential
+    # (Phase 2, docs/nats/). This rule only grants reachability.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: avm-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nats
+      ports:
+        - protocol: TCP
+          port: 4222
+
+    # --- PostgreSQL --------------------------------------------------------
+    # Row visibility is enforced by RLS (Phase 4, migration 006). This rule
+    # only grants reachability.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: avm-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: avm-agent-allow-gateway-ingress
+  labels:
+    app.kubernetes.io/part-of: avm
+    avm.io/policy-layer: container
+spec:
+  podSelector:
+    matchLabels:
+      avm.io/workload: agent
+  policyTypes:
+    - Ingress
+  ingress:
+    # Inbound A2A work arrives from the gateway and nowhere else, so every
+    # dispatch has necessarily passed validate_a2a_dispatch().
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: avm-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: avm-gateway
+      ports:
+        - protocol: TCP
+          port: 8081

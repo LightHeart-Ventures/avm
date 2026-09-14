@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "avm-proto",
+    "avm-agent",
     "avm-server",
     "avm-scheduler",
     "avm-executor",
@@ -25,6 +26,7 @@ authors = ["LightHeart Ventures"]
 [workspace.dependencies]
 # --- local crates ---
 avm-proto = { path = "avm-proto" }
+avm-agent = { path = "avm-agent" }
 avm-storage = { path = "avm-storage" }
 avm-queue = { path = "avm-queue" }
 avm-observability = { path = "avm-observability" }
