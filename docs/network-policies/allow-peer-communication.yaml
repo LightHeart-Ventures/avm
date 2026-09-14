@@ -1,0 +1,98 @@
+# allow-peer-communication.yaml
+#
+# OPT-IN companion to block-intra-project-a2a.yaml.
+#
+# Use this ONLY when two agents have a proven need for a direct data path that
+# cannot go through the gateway (bulk streaming, a sidecar protocol, latency
+# floor). Ordinary A2A task dispatch must keep going through the gateway so
+# that validate_a2a_dispatch() sees it and the audit trail stays complete.
+#
+# INVARIANT
+#   The `avm.io/tenant` label MUST match on both sides of every rule below.
+#   A NetworkPolicy that spans two tenants is a defect, not a configuration
+#   choice — the tenant boundary is hard at every layer.
+#
+# HOW THIS COMPOSES
+#   Kubernetes NetworkPolicies are additive (a union of allows). Applying this
+#   file punches a specific hole in the default-deny from
+#   block-intra-project-a2a.yaml; it does not replace it. Keep both applied.
+#
+# BEFORE YOU APPLY
+#   1. The callee's Agent Card must also list the caller in `trusted_peers`
+#      with `allow_intra_project: true` — otherwise the gateway still refuses
+#      the sanctioned path and you have an inconsistent posture.
+#   2. Record the exception (owner, reason, review date) in your change log.
+#      A permanent exception is a design smell.
+#
+# APPLY
+#   Copy, replace every <placeholder>, then:
+#   kubectl -n <tenant-namespace> apply -f allow-peer-communication.yaml
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: avm-peer-egress-<caller>-to-<callee>
+  annotations:
+    avm.io/exception-owner: "<team-or-person>"
+    avm.io/exception-reason: "<why the gateway path is insufficient>"
+    avm.io/exception-review-by: "<YYYY-MM-DD>"
+  labels:
+    app.kubernetes.io/part-of: avm
+    avm.io/policy-layer: container
+    avm.io/policy-kind: peer-exception
+spec:
+  # The CALLER: which Pods gain the right to dial out.
+  podSelector:
+    matchLabels:
+      avm.io/workload: agent
+      avm.io/tenant: "<tenant-id>"
+      avm.io/project: "<project-id>"
+      avm.io/agent: "<caller-agent-id>"
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              avm.io/workload: agent
+              # Same tenant. Non-negotiable.
+              avm.io/tenant: "<tenant-id>"
+              avm.io/project: "<project-id>"
+              avm.io/agent: "<callee-agent-id>"
+      ports:
+        - protocol: TCP
+          port: 8081
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: avm-peer-ingress-<callee>-from-<caller>
+  annotations:
+    avm.io/exception-owner: "<team-or-person>"
+    avm.io/exception-reason: "<why the gateway path is insufficient>"
+    avm.io/exception-review-by: "<YYYY-MM-DD>"
+  labels:
+    app.kubernetes.io/part-of: avm
+    avm.io/policy-layer: container
+    avm.io/policy-kind: peer-exception
+spec:
+  # The CALLEE: which Pods accept the inbound connection.
+  podSelector:
+    matchLabels:
+      avm.io/workload: agent
+      avm.io/tenant: "<tenant-id>"
+      avm.io/project: "<project-id>"
+      avm.io/agent: "<callee-agent-id>"
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              avm.io/workload: agent
+              avm.io/tenant: "<tenant-id>"
+              avm.io/project: "<project-id>"
+              avm.io/agent: "<caller-agent-id>"
+      ports:
+        - protocol: TCP
+          port: 8081

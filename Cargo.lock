@@ -173,6 +173,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "avm-agent"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "avm-cli"
 version = "0.1.0"
 dependencies = [
@@ -216,6 +225,7 @@ name = "avm-gateway"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "avm-agent",
  "avm-observability",
  "avm-proto",
  "avm-storage",

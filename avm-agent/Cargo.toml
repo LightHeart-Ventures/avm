@@ -1,0 +1,12 @@
+[package]
+name = "avm-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "AVM agent model: Agent Card, A2A task envelopes and the A2A trust policy."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

@@ -311,3 +311,80 @@ message ResultMessage {
   string result = 3;
   string error = 4;
 }
+
+// =====================================================================
+// A2A security — network isolation Phase 1.
+//
+// Typed errors and the audit envelope for agent-to-agent dispatch
+// authorization. Mirrors avm-gateway/src/security.rs. See
+// IMPLEMENTATION_PLAN.md § "Network Isolation & A2A Security".
+// =====================================================================
+
+// Why a dispatch was permitted. Recorded so an audit reader can tell an
+// explicit grant from a wide-open policy.
+enum AllowReason {
+  ALLOW_REASON_UNSPECIFIED = 0;
+  ALLOW_REASON_SELF_DISPATCH = 1;        // agent re-entering itself
+  ALLOW_REASON_TRUSTED_PEER = 2;         // caller named in trusted_peers
+  ALLOW_REASON_TRUST_DEFAULT_ALLOW = 3;  // callee's default is "allow"
+}
+
+// A violation of the tenant/project scope boundary. Maps to HTTP 403.
+message ScopeError {
+  enum Code {
+    SCOPE_CODE_UNSPECIFIED = 0;
+    // Cross-tenant dispatch. Unconditional — no policy can permit this.
+    SCOPE_CODE_CROSS_TENANT_DENIED = 1;
+    // Same tenant, different project, callee has allow_cross_project=false.
+    SCOPE_CODE_CROSS_PROJECT_DENIED = 2;
+    // Same project, callee has allow_intra_project=false (deny-by-default).
+    SCOPE_CODE_INTRA_PROJECT_DENIED = 3;
+  }
+  Code code = 1;
+  string message = 2;
+  Scope source = 3;
+  Scope target = 4;
+}
+
+// A violation of the callee's peer-trust policy. Maps to HTTP 403.
+message AuthError {
+  enum Code {
+    AUTH_CODE_UNSPECIFIED = 0;
+    // Scope checks passed, caller not in trusted_peers, default is deny.
+    AUTH_CODE_PEER_NOT_TRUSTED = 1;
+    // The resolved Agent Card does not describe the routed target.
+    AUTH_CODE_CARD_TARGET_MISMATCH = 2;
+  }
+  Code code = 1;
+  string message = 2;
+  string source_agent = 3;
+  string target_agent = 4;
+}
+
+// Error envelope attached to a rejected A2A response.
+message A2AError {
+  oneof error {
+    ScopeError scope_error = 1;
+    AuthError auth_error = 2;
+  }
+  // Stable code for metrics labels: "cross_tenant_denied",
+  // "cross_project_denied", "intra_project_denied", "peer_not_trusted",
+  // "card_target_mismatch".
+  string reason_code = 3;
+  uint32 http_status = 4;  // always 403; we do not leak agent existence
+}
+
+// One authorization decision. Emitted on EVERY dispatch attempt, allow or
+// deny — there is no silent path.
+message SecurityEvent {
+  string event_id = 1;
+  string task_id = 2;
+  Scope source = 3;
+  Scope target = 4;
+  bool allowed = 5;
+  // AllowReason name on allow, A2AError.reason_code on deny.
+  string reason = 6;
+  string detail = 7;        // human-readable; empty on allow
+  string trace_id = 8;
+  string created_at = 9;    // RFC-3339 UTC
+}

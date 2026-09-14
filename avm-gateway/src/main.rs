@@ -1,6 +1,8 @@
 //! `avm-gateway` entrypoint.
 
-use avm_gateway::{mcp_router, McpRouter};
+use std::sync::Arc;
+
+use avm_gateway::{a2a, mcp_router, A2AState, McpRouter, StaticCardRegistry};
 use clap::Parser;
 
 #[derive(Debug, Parser)]
@@ -15,7 +17,12 @@ async fn main() -> anyhow::Result<()> {
     avm_observability::init("avm-gateway");
     let args = Args::parse();
 
-    let app = mcp_router::router(McpRouter::new());
+    // Agent Card registry backing A2A scope validation. Empty at boot: cards
+    // are registered as agents come up, and an unresolved target is denied
+    // rather than waved through (see `a2a::A2AState::authorize`).
+    let cards = Arc::new(StaticCardRegistry::new());
+
+    let app = mcp_router::router(McpRouter::new()).merge(a2a::router(A2AState::new(cards)));
     let listener = tokio::net::TcpListener::bind(&args.listen_addr).await?;
 
     tracing::info!(addr = %args.listen_addr, "avm-gateway listening");
