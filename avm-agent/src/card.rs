@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::a2a_policy::{A2APolicy, AgentScope};
 use crate::discovery::SCHEMA_VERSION;
 
 /// A pointer at another agent — the minimum needed to fetch its card.
@@ -199,9 +200,10 @@ pub struct AgentCard {
     /// Base URL this card was served from; A2A paths hang off it.
     #[serde(default)]
     pub url: String,
-    /// Scope the agent runs under (system → tenant → project → agent).
+    /// Scope the agent runs under: the `(tenant, project, agent)` triple that
+    /// A2A boundary checks are evaluated against.
     #[serde(default)]
-    pub scope: avm_proto::types::Scope,
+    pub scope: AgentScope,
     /// Backing model.
     pub model_ref: ModelRef,
     /// Advertised capabilities.
@@ -212,21 +214,48 @@ pub struct AgentCard {
     pub mcp_servers: Vec<McpServerRef>,
     /// Inbound authorization policy.
     pub auth_policy: AuthPolicy,
-    // TODO(a2a-policy): reserve `pub a2a_policy: A2APolicy` here, sourced from
-    // `crate::a2a_policy::A2APolicy` once that module lands (owned by the
-    // network-isolation workstream, branch `aish/w_YH33ey4G`). It must carry
-    // `#[serde(default)]` so cards written before it existed still deserialize.
-    // Deliberately NOT defined here: a competing local `A2APolicy` type would
-    // have to be deleted on merge. Tenant/project boundary inputs for that
-    // policy are already available via `scope` / `tenant_id()` / `project_id()`.
+    /// Who may dispatch A2A work to this agent.
+    ///
+    /// Carries `#[serde(default)]` so cards written before the field existed
+    /// still deserialize — to [`A2APolicy::deny_all`], which is the safe
+    /// default. Enforced by `avm_gateway::security::validate_a2a_dispatch`.
+    #[serde(default)]
+    pub a2a_policy: A2APolicy,
     /// Free-form annotations (owner, repo, cost centre, …).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, String>,
 }
 
 impl AgentCard {
-    /// A minimally-valid card.
-    pub fn new(agent_id: impl Into<String>, name: impl Into<String>, model_ref: ModelRef) -> Self {
+    /// A minimally-valid card for an agent at `scope`, with the closed
+    /// default A2A policy.
+    ///
+    /// The agent's identity is taken from the scope triple, so a card and the
+    /// scope it is authorized against can never disagree.
+    pub fn new(name: impl Into<String>, scope: AgentScope) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION.to_string(),
+            agent_id: scope.agent_id.clone(),
+            name: name.into(),
+            description: String::new(),
+            version: "0.1.0".to_string(),
+            url: String::new(),
+            scope,
+            model_ref: ModelRef::default(),
+            capabilities: Vec::new(),
+            mcp_servers: Vec::new(),
+            auth_policy: AuthPolicy::default(),
+            a2a_policy: A2APolicy::default(),
+            metadata: BTreeMap::new(),
+        }
+    }
+
+    /// A minimally-valid card bound to a specific model, unscoped.
+    pub fn with_model(
+        agent_id: impl Into<String>,
+        name: impl Into<String>,
+        model_ref: ModelRef,
+    ) -> Self {
         Self {
             schema_version: SCHEMA_VERSION.to_string(),
             agent_id: agent_id.into(),
@@ -234,13 +263,20 @@ impl AgentCard {
             description: String::new(),
             version: "0.1.0".to_string(),
             url: String::new(),
-            scope: avm_proto::types::Scope::default(),
+            scope: AgentScope::default(),
             model_ref,
             capabilities: Vec::new(),
             mcp_servers: Vec::new(),
             auth_policy: AuthPolicy::default(),
+            a2a_policy: A2APolicy::default(),
             metadata: BTreeMap::new(),
         }
+    }
+
+    /// Attach an inbound A2A trust policy.
+    pub fn with_policy(mut self, policy: A2APolicy) -> Self {
+        self.a2a_policy = policy;
+        self
     }
 
     /// Tenant this agent is scoped to. Empty for system-scoped agents.
@@ -297,7 +333,7 @@ impl AgentCard {
             description: "Reviews pull requests for correctness, security, and style.".to_string(),
             version: "0.1.0".to_string(),
             url: "http://127.0.0.1:8080".to_string(),
-            scope: avm_proto::types::Scope::project("t_lightheart", "b_avm"),
+            scope: AgentScope::new("t_lightheart", "b_avm", "ag_pr_reviewer"),
             model_ref: ModelRef::hosted("anthropic", "claude-sonnet-4-6"),
             capabilities: vec![
                 Capability {
@@ -339,6 +375,9 @@ impl AgentCard {
                 allowed_agents: vec!["ag_planner".to_string()],
                 allow_anonymous: false,
             },
+            a2a_policy: A2APolicy::deny_all()
+                .with_trusted_peer("ag_planner")
+                .allowing_intra_project(),
             metadata: BTreeMap::from([
                 ("owner".to_string(), "platform".to_string()),
                 ("repo".to_string(), "LightHeart-Ventures/avm".to_string()),
@@ -350,6 +389,14 @@ impl AgentCard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn card_written_before_a2a_policy_existed_deserializes_to_deny_all() {
+        let mut value = serde_json::to_value(AgentCard::example()).unwrap();
+        value.as_object_mut().unwrap().remove("a2a_policy");
+        let back: AgentCard = serde_json::from_value(value).unwrap();
+        assert_eq!(back.a2a_policy, A2APolicy::deny_all());
+    }
 
     #[test]
     fn example_card_roundtrips_through_json() {
@@ -365,7 +412,7 @@ mod tests {
         assert_eq!(card.tenant_id(), "t_lightheart");
         assert_eq!(card.project_id(), "b_avm");
 
-        let system = AgentCard::new("ag_sys", "Sys", ModelRef::hosted("anthropic", "m"));
+        let system = AgentCard::with_model("ag_sys", "Sys", ModelRef::hosted("anthropic", "m"));
         assert!(system.tenant_id().is_empty());
         assert!(system.project_id().is_empty());
     }

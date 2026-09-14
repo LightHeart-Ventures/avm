@@ -41,10 +41,9 @@ from the code, CI fails.
   "version": "0.1.0",
   "url": "http://127.0.0.1:8080",
   "scope": {
-    "level": "project",
     "tenant_id": "t_lightheart",
     "project_id": "b_avm",
-    "agent_id": ""
+    "agent_id": "ag_pr_reviewer"
   },
   "model_ref": {
     "uri": "anthropic://claude-sonnet-4-6",
@@ -91,6 +90,12 @@ from the code, CI fails.
     "required_scopes": ["a2a:submit"],
     "allowed_agents": ["ag_planner"],
     "allow_anonymous": false
+  },
+  "a2a_policy": {
+    "default": "deny",
+    "trusted_peers": ["ag_planner"],
+    "allow_intra_project": true,
+    "allow_cross_project": false
   },
   "metadata": {
     "owner": "platform",

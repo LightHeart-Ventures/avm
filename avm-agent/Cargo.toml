@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "AVM Agent Card + A2A (agent-to-agent) task protocol types."
+description = "AVM agent model: Agent Card, A2A task envelopes and the A2A trust policy."
 
 [dependencies]
 avm-proto.workspace = true

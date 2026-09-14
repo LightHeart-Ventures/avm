@@ -1,34 +1,30 @@
-//! A2A surface: Agent Card discovery + inbound task submission.
+//! A2A discovery surface: the Agent Card this gateway advertises.
 //!
-//! Both endpoints are **test-only scaffolding** for the spec in
-//! `docs/A2A_AGENT_CARD.md`:
+//! `GET /.well-known/agent-card.json` serves [`AgentCard::example`], per the
+//! spec in `docs/A2A_AGENT_CARD.md`.
 //!
-//! * `GET /.well-known/agent-card.json` serves [`AgentCard::example`].
-//! * `POST /a2a/task` validates the envelope and echoes the instructions back.
-//!
-//! Neither one dispatches real work yet — see the TODOs below.
+//! Inbound dispatch (`POST /a2a/task`) lives in [`crate::a2a`], which
+//! authorizes every task against the caller's scope before routing it.
+//! [`handle_task`] here is the envelope-level validation the card spec
+//! describes — target, capability and allow-list checks against a concrete
+//! [`AgentCard`] — kept for callers that speak the richer [`A2ATask`]
+//! envelope. It does not dispatch real work yet.
 
 use std::sync::Arc;
 
 use avm_agent::{
-    A2AError, A2AResponse, A2ATask, AgentCard, ErrorCode, TaskResult, Usage, A2A_TASK_PATH,
-    AGENT_CARD_PATH,
+    A2AError, A2AResponse, A2ATask, AgentCard, ErrorCode, TaskResult, Usage, AGENT_CARD_PATH,
 };
-use axum::{
-    extract::State,
-    http::StatusCode,
-    routing::{get, post},
-    Json, Router,
-};
+use axum::{extract::State, routing::get, Json, Router};
 
-/// Card this gateway advertises, plus whatever the A2A handlers need.
+/// Card this gateway advertises at [`AGENT_CARD_PATH`].
 #[derive(Debug, Clone)]
-pub struct A2AState {
+pub struct CardState {
     /// The Agent Card served at [`AGENT_CARD_PATH`].
     pub card: Arc<AgentCard>,
 }
 
-impl Default for A2AState {
+impl Default for CardState {
     fn default() -> Self {
         Self {
             card: Arc::new(AgentCard::example()),
@@ -36,35 +32,22 @@ impl Default for A2AState {
     }
 }
 
-/// Build the A2A router. Merge it into the gateway's main router.
-pub fn router(state: A2AState) -> Router {
+/// Build the Agent Card router. Merge it into the gateway's main router.
+pub fn router(state: CardState) -> Router {
     Router::new()
         .route(AGENT_CARD_PATH, get(agent_card))
-        .route(A2A_TASK_PATH, post(submit_task))
         .with_state(state)
 }
 
 /// `GET /.well-known/agent-card.json`
-async fn agent_card(State(state): State<A2AState>) -> Json<AgentCard> {
+async fn agent_card(State(state): State<CardState>) -> Json<AgentCard> {
     Json((*state.card).clone())
 }
 
-/// `POST /a2a/task`
+/// Envelope-level validation of an [`A2ATask`] against a concrete card.
 ///
-/// TODO(avm): authenticate against `card.auth_policy`, enforce
-/// `context.scope`, then publish a `JobMessage` onto
-/// `avm.jobs.<tenant>.<project>` and return `202 Accepted` with a poll URL.
-async fn submit_task(
-    State(state): State<A2AState>,
-    Json(task): Json<A2ATask>,
-) -> (StatusCode, Json<A2AResponse>) {
-    let response = handle_task(&state.card, task);
-    let status =
-        StatusCode::from_u16(response.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    (status, Json(response))
-}
-
-/// Pure core of [`submit_task`], so it is testable without a live server.
+/// Pure, so it is testable without a live server. Scope authorization for the
+/// wire path is done by [`crate::security::validate_a2a_dispatch`].
 pub fn handle_task(card: &AgentCard, task: A2ATask) -> A2AResponse {
     if let Err(err) = task.validate() {
         return A2AResponse::failed(&task.task_id, err);
@@ -123,7 +106,7 @@ pub fn handle_task(card: &AgentCard, task: A2ATask) -> A2AResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use avm_agent::TaskStatus;
+    use avm_agent::{TaskStatus, A2A_TASK_PATH};
 
     fn card() -> AgentCard {
         AgentCard::example()
@@ -188,28 +171,16 @@ mod tests {
 
     #[tokio::test]
     async fn card_endpoint_serves_the_example_card() {
-        let Json(served) = agent_card(State(A2AState::default())).await;
+        let Json(served) = agent_card(State(CardState::default())).await;
         served.validate().unwrap();
         assert_eq!(served.agent_id, "ag_pr_reviewer");
         assert!(served.has_capability("review_pull_request"));
     }
 
-    #[tokio::test]
-    async fn task_endpoint_maps_status_codes() {
-        let (code, Json(body)) = submit_task(State(A2AState::default()), Json(task())).await;
-        assert_eq!(code, StatusCode::OK);
-        assert_eq!(body.status, TaskStatus::Succeeded);
-
-        let mut bad = task();
-        bad.target_agent = Some("ag_nope".into());
-        let (code, _) = submit_task(State(A2AState::default()), Json(bad)).await;
-        assert_eq!(code, StatusCode::NOT_FOUND);
-    }
-
     #[test]
     fn routes_are_registered_at_the_well_known_paths() {
         // Compile-time proof the router builds with the spec'd constants.
-        let _ = router(A2AState::default());
+        let _ = router(CardState::default());
         assert_eq!(AGENT_CARD_PATH, "/.well-known/agent-card.json");
         assert_eq!(A2A_TASK_PATH, "/a2a/task");
     }

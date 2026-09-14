@@ -1,6 +1,7 @@
-//! Agent Card + A2A (agent-to-agent) protocol types for AVM.
+//! `avm-agent` — the agent-facing data model for AVM.
 //!
-//! Two concerns live here:
+//! This crate carries the types that describe *an agent* rather than the
+//! runtime that executes it. Three concerns live here:
 //!
 //! * [`card`] — how an agent **advertises itself**. An [`AgentCard`] is the
 //!   JSON document served at [`discovery::AGENT_CARD_PATH`]
@@ -9,6 +10,14 @@
 //! * [`a2a`] — how an agent **accepts inbound work**. An [`A2ATask`] is POSTed
 //!   to [`discovery::A2A_TASK_PATH`] (`/a2a/task`) and answered with an
 //!   [`A2AResponse`].
+//! * [`a2a_policy`] — **who may call it**: the A2A trust policy carried on
+//!   every Agent Card, plus the [`AgentScope`] triple that tenant/project
+//!   boundaries are evaluated against. The gateway enforces it in
+//!   `avm_gateway::security::validate_a2a_dispatch`.
+//!
+//! The policy is not a separate document: [`AgentCard::a2a_policy`] is part of
+//! the card, and carries `#[serde(default)]` so cards written before the field
+//! existed still deserialize — to a deny-all policy, which is the safe default.
 //!
 //! Like [`avm_proto::types`], these are hand-written serde structs rather than
 //! `prost`-generated ones: the A2A data path is JSON over HTTP, so the wire
@@ -29,6 +38,7 @@
 //! ```
 
 pub mod a2a;
+pub mod a2a_policy;
 pub mod card;
 pub mod discovery;
 
@@ -36,6 +46,7 @@ pub use a2a::{
     A2AError, A2AResponse, A2ATask, Artifact, ErrorCode, TaskContext, TaskResult, TaskStatus,
     TaskTimeout, Usage,
 };
+pub use a2a_policy::{A2APolicy, AgentScope, TrustDefault};
 pub use card::{
     AgentCard, AgentRef, AuthPolicy, AuthScheme, Capability, McpServerRef, McpTransport, ModelRef,
 };

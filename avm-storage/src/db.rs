@@ -48,7 +48,10 @@ impl DbConfig {
 
 /// Build a pool from `cfg`.
 pub async fn connect(cfg: &DbConfig) -> Result<Db> {
-    tracing::info!(max_connections = cfg.max_connections, "connecting to postgres");
+    tracing::info!(
+        max_connections = cfg.max_connections,
+        "connecting to postgres"
+    );
     let pool = PgPoolOptions::new()
         .max_connections(cfg.max_connections)
         .min_connections(cfg.min_connections)

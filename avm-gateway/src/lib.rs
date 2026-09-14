@@ -8,18 +8,29 @@
 //! JSON-Schema contract, served over `GET /tools/schema` and enforced on
 //! `POST /tools/validate`.
 //!
-//! It also carries the agent's A2A surface (Agent Card discovery + inbound
-//! tasks) — see [`a2a_router`].
+//! It also carries the agent's A2A surface: Agent Card discovery
+//! ([`a2a_router`]) plus agent-to-agent dispatch (`POST /a2a/task`), which is
+//! authorized before it is routed — see [`security::validate_a2a_dispatch`].
 
+pub mod a2a;
 pub mod a2a_router;
 pub mod mcp_router;
+pub mod security;
 pub mod tools_api;
 
 use axum::Router;
 
-pub use a2a_router::A2AState;
+pub use a2a::{
+    A2AErrorBody, A2ARejection, A2AState, A2ATaskAccepted, A2ATaskRequest, CardResolver,
+    StaticCardRegistry,
+};
+pub use a2a_router::CardState;
 pub use avm_mcp_tools::{ManagedToolSet, ToolSchema, ToolSource};
 pub use mcp_router::{router, McpRouter, ToolCall, ToolResult};
+pub use security::{
+    validate_a2a_dispatch, A2ADispatch, AuthError, ScopeError, SecurityAudit, SecurityError,
+    SecurityEvent, TracingAudit,
+};
 
 /// Gateway runtime configuration.
 #[derive(Debug, Clone)]
@@ -45,8 +56,15 @@ pub fn router_with_tools(mcp: McpRouter, tools: ManagedToolSet) -> Router {
 
 /// The full gateway application: MCP tool routing, tool schemas, and the A2A
 /// surface (Agent Card discovery + inbound tasks).
-pub fn app(mcp: McpRouter, tools: ManagedToolSet, a2a: A2AState) -> Router {
-    router_with_tools(mcp, tools).merge(a2a_router::router(a2a))
+pub fn app(
+    mcp: McpRouter,
+    tools: ManagedToolSet,
+    a2a: A2AState,
+    cards: CardState,
+) -> Router {
+    router_with_tools(mcp, tools)
+        .merge(a2a::router(a2a))
+        .merge(a2a_router::router(cards))
 }
 
 /// Default wiring: the gateway's local routes plus their generated schemas.
@@ -79,7 +97,8 @@ mod tests {
         let _ = app(
             McpRouter::new(),
             ManagedToolSet::with_builtins(),
-            A2AState::default(),
+            A2AState::new(std::sync::Arc::new(StaticCardRegistry::new())),
+            CardState::default(),
         );
     }
 }

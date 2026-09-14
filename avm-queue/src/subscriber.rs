@@ -1,10 +1,7 @@
 //! JetStream durable pull consumer: hands jobs to the executor.
 
 use async_nats::jetstream::{
-    self,
-    consumer::pull::Config as PullConfig,
-    stream::Config as StreamConfig,
-    Message,
+    self, consumer::pull::Config as PullConfig, stream::Config as StreamConfig, Message,
 };
 use avm_proto::{subjects, JobMessage};
 use futures::StreamExt;
