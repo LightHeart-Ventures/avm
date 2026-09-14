@@ -388,3 +388,88 @@ message SecurityEvent {
   string trace_id = 8;
   string created_at = 9;    // RFC-3339 UTC
 }
+
+// ---------------------------------------------------------------------
+// Model distribution
+//
+// Models ship as OCI artifacts and are cached per node in a
+// content-addressed store (/var/lib/avm/models/blobs). The digest is the
+// identity; the registry/tag are provenance breadcrumbs.
+//
+// Canonical reference: oci://<registry>/<repo>[:<tag>]@sha256:<64 hex>
+// ---------------------------------------------------------------------
+
+message Model {
+  string digest = 1;                 // "sha256:<64 hex>" — authoritative
+  string registry = 2;               // "ghcr.io"
+  int64 size_bytes = 3;
+  string backend = 4;                // "llama.cpp" | "vllm" | "tgi"
+}
+
+// Where a model sits on a given node. Published by the executor, consumed by
+// the scheduler as node label model.avm.io/<digest>=<status>.
+message ModelPlacement {
+  string node_id = 1;
+  string status = 2;                 // "resident" | "cached" | "absent" | "pulling" | "failed"
+}
+
+// ---------------------------------------------------------------------
+// Tool signatures (JSON-Schema)
+//
+// Tool contracts are expressed in JSON-Schema (draft 2020-12) and carried
+// as serialized strings so they survive the wire byte-for-byte. See
+// IMPLEMENTATION_PLAN.md § Tool Schema & Validation.
+// ---------------------------------------------------------------------
+
+service ToolService {
+  // Full catalog of callable tools + their JSON-Schema signatures.
+  rpc ListToolDefinitions(ListToolDefinitionsRequest) returns (ListToolDefinitionsResponse);
+  // Check a call against its tool's input schema before dispatching it.
+  rpc ValidateToolCall(ValidateToolCallRequest) returns (ToolCallValidation);
+}
+
+message ToolDefinition {
+  string name = 1;
+  // JSON-Schema document for the argument object, serialized.
+  string json_schema = 2;
+  string description = 3;
+  // JSON-Schema document for the result, serialized. Empty when unknown.
+  string output_json_schema = 4;
+  // MCP server id that owns the tool ("builtin" for gateway-local tools).
+  string source_id = 5;
+  string transport = 6;              // "builtin" | "stdio" | "http"
+  string version = 7;                // server-declared, optional
+  // Stable fingerprint of the contract; changes iff the schema changes.
+  string fingerprint = 8;
+}
+
+message ToolCall {
+  string tool_name = 1;
+  // Arguments as a serialized JSON object.
+  string arguments_json = 2;
+  Scope scope = 3;
+  string call_id = 4;
+}
+
+message ToolCallValidation {
+  string tool_name = 1;
+  bool valid = 2;
+  repeated string errors = 3;
+  string schema_fingerprint = 4;
+}
+
+message ListToolDefinitionsRequest {
+  Scope reader_scope = 1;
+  // Optional filter: only tools contributed by these MCP source ids.
+  repeated string source_ids = 2;
+}
+
+message ListToolDefinitionsResponse {
+  repeated ToolDefinition tools = 1;
+  string catalog_version = 2;        // "avm.tools/v1"
+  string dialect = 3;                // JSON-Schema dialect URI
+}
+
+message ValidateToolCallRequest {
+  ToolCall call = 1;
+}

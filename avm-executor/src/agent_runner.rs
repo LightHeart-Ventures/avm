@@ -65,7 +65,11 @@ impl AgentRunner {
         if agent_id.is_empty() || agent_id.contains('/') {
             return Err(RunError::Unresolved(agent_id.to_string()));
         }
-        Ok(format!("{}/{}", self.agent_dir.trim_end_matches('/'), agent_id))
+        Ok(format!(
+            "{}/{}",
+            self.agent_dir.trim_end_matches('/'),
+            agent_id
+        ))
     }
 
     /// Spawn the agent, stream the payload to stdin, collect stdout/stderr.
@@ -111,12 +115,17 @@ impl AgentRunner {
             return Err(RunError::NonZeroExit { code, stderr });
         }
 
-        Ok(RunOutcome { stdout, stderr, exit_code: code })
+        Ok(RunOutcome {
+            stdout,
+            stderr,
+            exit_code: code,
+        })
     }
 }
 
-/// Resource isolation (cgroup v2 / rlimit) applied before exec.
 pub mod isolation {
+    //! Resource isolation (cgroup v2 / rlimit) applied before exec.
+    //!
     //! TODO(avm): apply cgroup v2 cpu.max + memory.max and setrlimit before
     //! exec. Linux-only; gate behind `#[cfg(target_os = "linux")]`.
 
@@ -130,7 +139,11 @@ pub mod isolation {
 
     impl Default for Limits {
         fn default() -> Self {
-            Self { cpu_millicores: 500, memory_bytes: 512 * 1024 * 1024, max_open_files: 1024 }
+            Self {
+                cpu_millicores: 500,
+                memory_bytes: 512 * 1024 * 1024,
+                max_open_files: 1024,
+            }
         }
     }
 }

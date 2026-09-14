@@ -1,6 +1,7 @@
 //! Executor: pulls jobs off JetStream and runs agent processes.
 
 pub mod agent_runner;
+pub mod model_server;
 
 use std::sync::Arc;
 
@@ -10,6 +11,7 @@ use avm_storage::{jobs, Db};
 use tokio::sync::Semaphore;
 
 pub use agent_runner::{AgentRunner, RunOutcome, RunSpec};
+pub use model_server::{ExecutorKind, ModelServerSpec, Mount};
 
 /// Executor tuning.
 #[derive(Debug, Clone)]

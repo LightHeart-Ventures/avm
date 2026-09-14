@@ -1,0 +1,16 @@
+[package]
+name = "avm-mcp-tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "JSON-Schema tool signatures for AVM: generation, registry and runtime validation of MCP tool calls."
+
+[dependencies]
+avm-proto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+schemars.workspace = true
+jsonschema.workspace = true

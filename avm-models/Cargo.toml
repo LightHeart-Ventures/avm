@@ -1,0 +1,29 @@
+[package]
+name = "avm-models"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "AVM model distribution: OCI artifact pulls, content-addressed blob store, residency + GC."
+
+[features]
+# The real registry client (oras-project/rust-oci-client). Off by default so
+# `cargo test --workspace` stays hermetic and does not need TLS/network deps.
+default = []
+oci-registry = ["dep:oci-client"]
+
+[dependencies]
+tokio = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+sha2.workspace = true
+hex.workspace = true
+oci-client = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

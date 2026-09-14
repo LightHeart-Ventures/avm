@@ -3,10 +3,12 @@
 //! * [`db`] — pool construction and migration runner
 //! * [`memories`] — scope-addressed memory read/write
 //! * [`jobs`] — durable job CRUD and state transitions
+//! * [`models`] — model catalogue, pull history and per-node placement
 
 pub mod db;
 pub mod jobs;
 pub mod memories;
+pub mod models;
 
 pub use db::{connect, migrate, Db, DbConfig};
 
