@@ -16,26 +16,24 @@
 
 pub mod agent_runner;
 pub mod model_server;
+pub mod sandbox;
 
 use std::sync::Arc;
 use std::time::Instant;
 
-use avm_otel::metrics::{
-    self, EXECUTOR_CONTAINER_DURATION, TENANT_JOB_COUNT, TENANT_JOB_DURATION,
-};
+use avm_otel::metrics::{self, EXECUTOR_CONTAINER_DURATION, TENANT_JOB_COUNT, TENANT_JOB_DURATION};
 use avm_otel::InstrumentationLevel;
 use avm_proto::types::ResultMessage;
 use avm_queue::{Publisher, Subscriber};
 use avm_storage::{jobs, Db};
 use tokio::sync::Semaphore;
 
-pub use agent_runner::{AgentRunner, RunOutcome, RunSpec};
+pub use agent_runner::{AgentResolver, AgentRunner, ConfigMapResolver, RunOutcome, RunSpec};
 pub use model_server::{ExecutorKind, ModelServerSpec, Mount};
-
-/// Executor backend label for `avm_executor_container_duration_seconds`.
-///
-/// One value today (fork/exec); OCI and Firecracker backends add their own.
-const EXECUTOR_TYPE: &str = "process";
+pub use sandbox::{
+    ImageRef, NetworkMode, OciSandbox, ProcessSandbox, ResourceLimits, Sandbox, SandboxError,
+    SandboxKind, SandboxOutcome, SandboxRuntime, SandboxSpec,
+};
 
 /// Executor tuning.
 #[derive(Debug, Clone)]
@@ -48,6 +46,11 @@ pub struct ExecutorConfig {
     pub batch_size: usize,
     /// Hard wall-clock limit per job.
     pub wall_time_sec: u64,
+    /// Gateway base URL handed to agents as `AVM_GATEWAY_URL`.
+    ///
+    /// Only injected alongside a job-scoped token; a URL on its own gives an
+    /// agent nothing, since the default network posture is `none`.
+    pub gateway_url: Option<String>,
 }
 
 impl Default for ExecutorConfig {
@@ -57,6 +60,7 @@ impl Default for ExecutorConfig {
             max_concurrency: 8,
             batch_size: 16,
             wall_time_sec: 900,
+            gateway_url: std::env::var("AVM_GATEWAY_URL").ok(),
         }
     }
 }
@@ -129,11 +133,19 @@ impl Executor {
                         scope: job.scope.clone(),
                         trace: trace.clone(),
                         instrumentation: level,
+                        // TODO(avm): once avm-gateway mints job-scoped bearer
+                        // tokens (audience = job_id, TTL = wall time), plumb
+                        // them through here. Until then agents get no network.
+                        gateway_url: self.cfg.gateway_url.clone(),
+                        gateway_token: None,
                     })
                     .await;
 
                 let elapsed = started.elapsed().as_secs_f64();
-                let traceparent = trace.as_ref().map(|c| c.to_traceparent()).unwrap_or_default();
+                let traceparent = trace
+                    .as_ref()
+                    .map(|c| c.to_traceparent())
+                    .unwrap_or_default();
 
                 let (result, outcome_label) = match outcome {
                     Ok(RunOutcome { stdout, .. }) => {
@@ -195,7 +207,10 @@ impl Executor {
         let reg = metrics::registry();
         reg.histogram_observe(
             EXECUTOR_CONTAINER_DURATION,
-            &[("executor_type", EXECUTOR_TYPE), ("outcome", outcome)],
+            &[
+                ("executor_type", self.runner.executor_type()),
+                ("outcome", outcome),
+            ],
             elapsed,
         );
 
