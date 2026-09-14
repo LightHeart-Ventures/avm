@@ -15,6 +15,8 @@ pub struct GatewayConfig {
 
 impl Default for GatewayConfig {
     fn default() -> Self {
-        Self { listen_addr: "0.0.0.0:8080".to_string() }
+        Self {
+            listen_addr: "0.0.0.0:8080".to_string(),
+        }
     }
 }

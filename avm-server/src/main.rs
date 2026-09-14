@@ -13,7 +13,11 @@ struct Args {
     listen_addr: String,
 
     /// Postgres connection string.
-    #[arg(long, env = "DATABASE_URL", default_value = "postgres://avm:avm@localhost:5432/avm")]
+    #[arg(
+        long,
+        env = "DATABASE_URL",
+        default_value = "postgres://avm:avm@localhost:5432/avm"
+    )]
     database_url: String,
 
     /// NATS endpoint.

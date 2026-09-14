@@ -58,11 +58,18 @@ pub struct Scope {
 
 impl Scope {
     pub fn system() -> Self {
-        Self { level: "system".into(), ..Default::default() }
+        Self {
+            level: "system".into(),
+            ..Default::default()
+        }
     }
 
     pub fn tenant(tenant_id: impl Into<String>) -> Self {
-        Self { level: "tenant".into(), tenant_id: tenant_id.into(), ..Default::default() }
+        Self {
+            level: "tenant".into(),
+            tenant_id: tenant_id.into(),
+            ..Default::default()
+        }
     }
 
     pub fn project(tenant_id: impl Into<String>, project_id: impl Into<String>) -> Self {
