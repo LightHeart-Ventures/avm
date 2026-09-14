@@ -5,6 +5,7 @@ members = [
     "avm-server",
     "avm-scheduler",
     "avm-executor",
+    "avm-models",
     "avm-gateway",
     "avm-mcp-tools",
     "avm-storage",
@@ -27,6 +28,7 @@ avm-proto = { path = "avm-proto" }
 avm-storage = { path = "avm-storage" }
 avm-queue = { path = "avm-queue" }
 avm-observability = { path = "avm-observability" }
+avm-models = { path = "avm-models" }
 avm-mcp-tools = { path = "avm-mcp-tools" }
 
 # --- async runtime / rpc ---
@@ -57,6 +59,13 @@ axum = "0.7"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace"] }
 
+# --- model distribution (OCI artifacts + content addressing) ---
+# `oci-client` is the oras-project Rust client (github.com/oras-project/rust-oci-client);
+# the `oras` crate name on crates.io is an unreleased 0.0.1 placeholder.
+oci-client = { version = "0.17", default-features = false, features = ["rustls-tls"] }
+sha2 = "0.10"
+hex = "0.4"
+async-trait = "0.1"
 # --- json-schema (tool signatures) ---
 # schemars generates schemas from native Rust argument types;
 # jsonschema validates instances against them at dispatch time.

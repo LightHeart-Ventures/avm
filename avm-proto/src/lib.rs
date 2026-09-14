@@ -10,9 +10,11 @@ pub mod v1 {
     include!(concat!(env!("OUT_DIR"), "/avm.v1.rs"));
 }
 
+pub mod models;
 pub mod tools;
 pub mod types;
 
+pub use models::{Model, ModelPlacement};
 pub use tools::{ToolCall, ToolCallValidation, ToolDefinition};
 pub use types::{JobMessage, ResultMessage, Scope, ScopeLevel};
 
@@ -29,20 +31,12 @@ pub mod subjects {
 
     /// `avm.jobs.<tenant>.<project>`
     pub fn job_subject(tenant_id: &str, project_id: &str) -> String {
-        format!(
-            "avm.jobs.{}.{}",
-            norm(tenant_id),
-            norm(project_id)
-        )
+        format!("avm.jobs.{}.{}", norm(tenant_id), norm(project_id))
     }
 
     /// `avm.results.<tenant>.<project>`
     pub fn result_subject(tenant_id: &str, project_id: &str) -> String {
-        format!(
-            "avm.results.{}.{}",
-            norm(tenant_id),
-            norm(project_id)
-        )
+        format!("avm.results.{}.{}", norm(tenant_id), norm(project_id))
     }
 
     fn norm(s: &str) -> &str {
@@ -64,6 +58,9 @@ mod tests {
             subjects::job_subject("t_acme", "b_payments"),
             "avm.jobs.t_acme.b_payments"
         );
-        assert_eq!(subjects::result_subject("t_acme", ""), "avm.results.t_acme._");
+        assert_eq!(
+            subjects::result_subject("t_acme", ""),
+            "avm.results.t_acme._"
+        );
     }
 }

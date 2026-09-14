@@ -81,12 +81,7 @@ pub async fn write(db: &Db, mem: &NewMemory) -> Result<MemoryRow> {
 }
 
 /// Read one memory, enforcing the scope ACL before touching the database.
-pub async fn read(
-    db: &Db,
-    reader: &Scope,
-    target: &Scope,
-    memory_id: &str,
-) -> Result<MemoryRow> {
+pub async fn read(db: &Db, reader: &Scope, target: &Scope, memory_id: &str) -> Result<MemoryRow> {
     authorize(reader, target)?;
 
     let row = sqlx::query_as::<_, MemoryRow>(
@@ -178,10 +173,11 @@ pub async fn delete(db: &Db, reader: &Scope, memory_id: &str) -> Result<bool> {
 
 /// Purge expired rows; called periodically by the scheduler.
 pub async fn purge_expired(db: &Db) -> Result<u64> {
-    let affected = sqlx::query("DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at <= now()")
-        .execute(db)
-        .await?
-        .rows_affected();
+    let affected =
+        sqlx::query("DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at <= now()")
+            .execute(db)
+            .await?
+            .rows_affected();
     Ok(affected)
 }
 

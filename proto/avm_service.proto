@@ -313,6 +313,30 @@ message ResultMessage {
 }
 
 // ---------------------------------------------------------------------
+// Model distribution
+//
+// Models ship as OCI artifacts and are cached per node in a
+// content-addressed store (/var/lib/avm/models/blobs). The digest is the
+// identity; the registry/tag are provenance breadcrumbs.
+//
+// Canonical reference: oci://<registry>/<repo>[:<tag>]@sha256:<64 hex>
+// ---------------------------------------------------------------------
+
+message Model {
+  string digest = 1;                 // "sha256:<64 hex>" — authoritative
+  string registry = 2;               // "ghcr.io"
+  int64 size_bytes = 3;
+  string backend = 4;                // "llama.cpp" | "vllm" | "tgi"
+}
+
+// Where a model sits on a given node. Published by the executor, consumed by
+// the scheduler as node label model.avm.io/<digest>=<status>.
+message ModelPlacement {
+  string node_id = 1;
+  string status = 2;                 // "resident" | "cached" | "absent" | "pulling" | "failed"
+}
+
+// ---------------------------------------------------------------------
 // Tool signatures (JSON-Schema)
 //
 // Tool contracts are expressed in JSON-Schema (draft 2020-12) and carried
