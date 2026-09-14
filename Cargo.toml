@@ -6,6 +6,7 @@ members = [
     "avm-scheduler",
     "avm-executor",
     "avm-gateway",
+    "avm-mcp-tools",
     "avm-storage",
     "avm-queue",
     "avm-observability",
@@ -26,6 +27,7 @@ avm-proto = { path = "avm-proto" }
 avm-storage = { path = "avm-storage" }
 avm-queue = { path = "avm-queue" }
 avm-observability = { path = "avm-observability" }
+avm-mcp-tools = { path = "avm-mcp-tools" }
 
 # --- async runtime / rpc ---
 tokio = { version = "1", features = ["full"] }
@@ -54,6 +56,12 @@ async-nats = "0.38"
 axum = "0.7"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace"] }
+
+# --- json-schema (tool signatures) ---
+# schemars generates schemas from native Rust argument types;
+# jsonschema validates instances against them at dispatch time.
+schemars = { version = "0.8", features = ["derive"] }
+jsonschema = { version = "0.26", default-features = false }
 
 # --- serialization / util ---
 serde = { version = "1", features = ["derive"] }

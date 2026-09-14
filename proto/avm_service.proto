@@ -311,3 +311,64 @@ message ResultMessage {
   string result = 3;
   string error = 4;
 }
+
+// ---------------------------------------------------------------------
+// Tool signatures (JSON-Schema)
+//
+// Tool contracts are expressed in JSON-Schema (draft 2020-12) and carried
+// as serialized strings so they survive the wire byte-for-byte. See
+// IMPLEMENTATION_PLAN.md § Tool Schema & Validation.
+// ---------------------------------------------------------------------
+
+service ToolService {
+  // Full catalog of callable tools + their JSON-Schema signatures.
+  rpc ListToolDefinitions(ListToolDefinitionsRequest) returns (ListToolDefinitionsResponse);
+  // Check a call against its tool's input schema before dispatching it.
+  rpc ValidateToolCall(ValidateToolCallRequest) returns (ToolCallValidation);
+}
+
+message ToolDefinition {
+  string name = 1;
+  // JSON-Schema document for the argument object, serialized.
+  string json_schema = 2;
+  string description = 3;
+  // JSON-Schema document for the result, serialized. Empty when unknown.
+  string output_json_schema = 4;
+  // MCP server id that owns the tool ("builtin" for gateway-local tools).
+  string source_id = 5;
+  string transport = 6;              // "builtin" | "stdio" | "http"
+  string version = 7;                // server-declared, optional
+  // Stable fingerprint of the contract; changes iff the schema changes.
+  string fingerprint = 8;
+}
+
+message ToolCall {
+  string tool_name = 1;
+  // Arguments as a serialized JSON object.
+  string arguments_json = 2;
+  Scope scope = 3;
+  string call_id = 4;
+}
+
+message ToolCallValidation {
+  string tool_name = 1;
+  bool valid = 2;
+  repeated string errors = 3;
+  string schema_fingerprint = 4;
+}
+
+message ListToolDefinitionsRequest {
+  Scope reader_scope = 1;
+  // Optional filter: only tools contributed by these MCP source ids.
+  repeated string source_ids = 2;
+}
+
+message ListToolDefinitionsResponse {
+  repeated ToolDefinition tools = 1;
+  string catalog_version = 2;        // "avm.tools/v1"
+  string dialect = 3;                // JSON-Schema dialect URI
+}
+
+message ValidateToolCallRequest {
+  ToolCall call = 1;
+}
