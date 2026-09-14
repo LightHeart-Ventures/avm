@@ -1,0 +1,18 @@
+[package]
+name = "avm-observability"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Tracing/metrics bootstrap for AVM (structured logs now, OTLP export behind the `otlp` feature)."
+
+[features]
+default = []
+# Enables the OTLP exporter wiring. Kept off by default so the workspace
+# builds without an opentelemetry toolchain pinned to a specific API version.
+otlp = []
+
+[dependencies]
+tracing.workspace = true
+tracing-subscriber.workspace = true
+thiserror.workspace = true

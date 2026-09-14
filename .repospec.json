@@ -1,0 +1,68 @@
+{
+  "schema": "repospec/v1",
+  "name": "avm",
+  "version": "0.1.0",
+  "description": "Agent Virtual Machine — multi-tenant Rust runtime for AI agents. gRPC control plane, NATS JetStream job bus, PostgreSQL state, process-pool execution, MCP gateway, OTel instrumentation.",
+  "entrypoints": [
+    "avm-server/src/main.rs",
+    "avm-scheduler/src/main.rs",
+    "avm-executor/src/main.rs",
+    "avm-gateway/src/main.rs",
+    "avm-cli/src/main.rs"
+  ],
+  "modules": [
+    "avm-proto",
+    "avm-server",
+    "avm-scheduler",
+    "avm-executor",
+    "avm-gateway",
+    "avm-storage",
+    "avm-queue",
+    "avm-observability",
+    "avm-cli"
+  ],
+  "key_files": [
+    "Cargo.toml",
+    "proto/avm_service.proto",
+    "docker-compose.yml",
+    "migrations/001_create_memories.sql",
+    "migrations/002_create_jobs.sql",
+    "migrations/003_create_audit_logs.sql",
+    "migrations/004_create_quotas.sql",
+    "migrations/005_create_indexes.sql",
+    "avm-storage/src/db.rs",
+    "avm-storage/src/memories.rs",
+    "avm-storage/src/jobs.rs",
+    "avm-queue/src/publisher.rs",
+    "avm-queue/src/subscriber.rs",
+    "avm-executor/src/agent_runner.rs",
+    "avm-gateway/src/mcp_router.rs",
+    "avm-observability/src/tracing.rs",
+    "ARCHITECTURE.md",
+    "DESIGN.md",
+    "DEVELOPMENT.md"
+  ],
+  "patterns": {
+    "language": "Rust 2021 (MSRV 1.70)",
+    "layout": "Cargo workspace, one crate per component",
+    "rpc": "gRPC via tonic + prost (proto/avm_service.proto)",
+    "queue": "NATS JetStream (async-nats), subjects avm.jobs.<tenant>.<project> / avm.results.<tenant>.<project>",
+    "state": "PostgreSQL 16 via sqlx (runtime queries, embedded migrations)",
+    "http": "axum (MCP gateway)",
+    "observability": "tracing + tracing-subscriber; OTLP export behind the `otlp` feature",
+    "scope_model": "system -> tenant -> project -> agent; readers see own scope + ancestors"
+  },
+  "services": {
+    "avm-server": "gRPC control plane: TenantService, AgentService, JobService, MemoryService",
+    "avm-scheduler": "reconciler: re-publish queued jobs, quota gate, reap stale runs, purge expired memories",
+    "avm-executor": "JetStream pull consumer + bounded process pool (fork/exec agents)",
+    "avm-gateway": "HTTP MCP tool routing (local handlers + upstream proxy)",
+    "avm-cli": "operator CLI binary `avm` (migrate, submit, job, jobs, memories)"
+  },
+  "dev": {
+    "up": "docker compose up -d",
+    "migrate": "cargo run -p avm-cli -- migrate",
+    "build": "cargo build --workspace",
+    "test": "cargo test --workspace"
+  }
+}

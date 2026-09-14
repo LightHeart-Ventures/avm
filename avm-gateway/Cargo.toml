@@ -1,0 +1,26 @@
+[package]
+name = "avm-gateway"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "AVM MCP gateway: HTTP tool routing for agent tool calls."
+
+[[bin]]
+name = "avm-gateway"
+path = "src/main.rs"
+
+[dependencies]
+avm-proto.workspace = true
+avm-storage.workspace = true
+avm-observability.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+clap.workspace = true

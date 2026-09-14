@@ -1,0 +1,18 @@
+[package]
+name = "avm-storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "PostgreSQL persistence layer (sqlx pool, migrations, memories + jobs repositories)."
+
+[dependencies]
+avm-proto.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

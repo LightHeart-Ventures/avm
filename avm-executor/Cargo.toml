@@ -1,0 +1,28 @@
+[package]
+name = "avm-executor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "AVM executor: JetStream consumer + process pool that forks agent processes."
+
+[[bin]]
+name = "avm-executor"
+path = "src/main.rs"
+
+[dependencies]
+avm-proto.workspace = true
+avm-storage.workspace = true
+avm-queue.workspace = true
+avm-observability.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+clap.workspace = true

@@ -1,0 +1,313 @@
+syntax = "proto3";
+
+package avm.v1;
+
+// =====================================================================
+// AVM (Agent Virtual Machine) control-plane API.
+//
+// Transport: gRPC (tonic). Async job flow rides NATS JetStream using the
+// JobMessage / ResultMessage envelopes defined at the bottom of this file.
+// =====================================================================
+
+// ---------------------------------------------------------------------
+// Common
+// ---------------------------------------------------------------------
+
+message Empty {}
+
+// Scope hierarchy: system -> tenant -> project -> agent.
+// A reader at a given level may read its own scope and all ancestors.
+message Scope {
+  string level = 1;    // "system" | "tenant" | "project" | "agent"
+  string tenant_id = 2;
+  string project_id = 3;
+  string agent_id = 4;
+}
+
+message Page {
+  uint32 limit = 1;
+  string cursor = 2;
+}
+
+// ---------------------------------------------------------------------
+// Tenant service — CRUD + quota management
+// ---------------------------------------------------------------------
+
+service TenantService {
+  rpc CreateTenant(CreateTenantRequest) returns (Tenant);
+  rpc GetTenant(GetTenantRequest) returns (Tenant);
+  rpc UpdateTenantQuotas(UpdateTenantQuotasRequest) returns (Tenant);
+  rpc DeleteTenant(DeleteTenantRequest) returns (Empty);
+  rpc ListTenants(ListTenantsRequest) returns (ListTenantsResponse);
+  rpc GetQuotaUsage(GetQuotaUsageRequest) returns (QuotaUsage);
+}
+
+message Tenant {
+  string tenant_id = 1;              // "t_abc123"
+  string name = 2;
+  map<string, string> labels = 3;    // team, environment, billing_code
+  QuotaConfig quotas = 4;
+  string status = 5;                 // "active" | "suspended"
+  string created_at = 6;             // RFC-3339 UTC
+  string updated_at = 7;
+}
+
+message QuotaConfig {
+  uint32 max_concurrent_agents = 1;
+  uint64 max_daily_tokens = 2;
+  double max_monthly_spend_usd = 3;
+  uint32 max_jobs_per_minute = 4;
+  repeated string allowed_models = 5;
+}
+
+message QuotaUsage {
+  string tenant_id = 1;
+  string project_id = 2;
+  uint32 concurrent_agents = 3;
+  uint64 tokens_today = 4;
+  double spend_month_usd = 5;
+  string window_start = 6;
+  string window_end = 7;
+}
+
+message CreateTenantRequest {
+  string name = 1;
+  map<string, string> labels = 2;
+  QuotaConfig quotas = 3;
+}
+
+message GetTenantRequest { string tenant_id = 1; }
+message DeleteTenantRequest { string tenant_id = 1; }
+
+message UpdateTenantQuotasRequest {
+  string tenant_id = 1;
+  QuotaConfig quotas = 2;
+}
+
+message ListTenantsRequest { Page page = 1; }
+
+message ListTenantsResponse {
+  repeated Tenant tenants = 1;
+  string next_cursor = 2;
+}
+
+message GetQuotaUsageRequest {
+  string tenant_id = 1;
+  string project_id = 2;
+}
+
+// ---------------------------------------------------------------------
+// Agent service — registration + discovery
+// ---------------------------------------------------------------------
+
+service AgentService {
+  rpc RegisterAgent(RegisterAgentRequest) returns (Agent);
+  rpc GetAgent(GetAgentRequest) returns (Agent);
+  rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
+  rpc UpdateAgent(UpdateAgentRequest) returns (Agent);
+  rpc DeregisterAgent(DeregisterAgentRequest) returns (Empty);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+message Agent {
+  string agent_id = 1;               // "ag_xyz789"
+  string tenant_id = 2;
+  string project_id = 3;
+  string name = 4;
+  string version = 5;
+  string entrypoint = 6;             // local binary path or container image
+  string prompt = 7;
+  repeated string tools = 8;
+  string model = 9;
+  AgentPlacement placement = 10;
+  string status = 11;                // "registered"|"running"|"failed"|"quarantined"
+  string registered_at = 12;
+}
+
+message AgentPlacement {
+  string pool_id = 1;
+  uint32 cpu_millicores = 2;
+  uint64 memory_bytes = 3;
+  uint32 wall_time_sec = 4;
+}
+
+message RegisterAgentRequest {
+  string tenant_id = 1;
+  string project_id = 2;
+  string name = 3;
+  string version = 4;
+  string entrypoint = 5;
+  string prompt = 6;
+  repeated string tools = 7;
+  string model = 8;
+  AgentPlacement placement = 9;
+}
+
+message GetAgentRequest { string agent_id = 1; }
+message DeregisterAgentRequest { string agent_id = 1; }
+
+message UpdateAgentRequest {
+  string agent_id = 1;
+  Agent agent = 2;
+  repeated string update_mask = 3;
+}
+
+message ListAgentsRequest {
+  string tenant_id = 1;
+  string project_id = 2;
+  string status = 3;
+  Page page = 4;
+}
+
+message ListAgentsResponse {
+  repeated Agent agents = 1;
+  string next_cursor = 2;
+}
+
+message HeartbeatRequest {
+  string agent_id = 1;
+  string executor_id = 2;
+  string status = 3;
+}
+
+message HeartbeatResponse {
+  bool acknowledged = 1;
+  uint32 next_interval_sec = 2;
+}
+
+// ---------------------------------------------------------------------
+// Job service — submit / query / cancel
+// ---------------------------------------------------------------------
+
+service JobService {
+  rpc SubmitJob(SubmitJobRequest) returns (Job);
+  rpc GetJob(GetJobRequest) returns (Job);
+  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+  rpc CancelJob(CancelJobRequest) returns (Job);
+  rpc WatchJob(WatchJobRequest) returns (stream JobUpdate);
+}
+
+message Job {
+  string job_id = 1;                 // "job_abc123"
+  Scope scope = 2;
+  string agent_id = 3;
+  string payload = 4;                // JSON task envelope
+  string status = 5;                 // queued|running|succeeded|failed|cancelled
+  uint32 priority = 6;               // 0 = highest
+  uint32 retry_count = 7;
+  uint32 max_retries = 8;
+  string last_error = 9;
+  string result = 10;
+  string created_at = 11;
+  string started_at = 12;
+  string finished_at = 13;
+}
+
+message SubmitJobRequest {
+  Scope scope = 1;
+  string agent_id = 2;
+  string payload = 3;
+  uint32 priority = 4;
+  uint32 max_retries = 5;
+  string idempotency_key = 6;
+}
+
+message GetJobRequest { string job_id = 1; }
+message CancelJobRequest { string job_id = 1; string reason = 2; }
+message WatchJobRequest { string job_id = 1; }
+
+message JobUpdate {
+  string job_id = 1;
+  string status = 2;
+  string message = 3;
+  string emitted_at = 4;
+}
+
+message ListJobsRequest {
+  Scope scope = 1;
+  string status = 2;
+  string agent_id = 3;
+  Page page = 4;
+}
+
+message ListJobsResponse {
+  repeated Job jobs = 1;
+  string next_cursor = 2;
+}
+
+// ---------------------------------------------------------------------
+// Memory service — read/write with scope-based ACL
+// ---------------------------------------------------------------------
+
+service MemoryService {
+  rpc WriteMemory(WriteMemoryRequest) returns (Memory);
+  rpc ReadMemory(ReadMemoryRequest) returns (Memory);
+  rpc ListMemories(ListMemoriesRequest) returns (ListMemoriesResponse);
+  rpc DeleteMemory(DeleteMemoryRequest) returns (Empty);
+}
+
+message Memory {
+  string memory_id = 1;
+  Scope scope = 2;
+  string content = 3;                // <= 32 KB
+  repeated string tags = 4;
+  string owner_id = 5;
+  uint64 ttl_seconds = 6;
+  string created_at = 7;
+  string updated_at = 8;
+}
+
+message WriteMemoryRequest {
+  Scope scope = 1;
+  string memory_id = 2;              // empty = create, set = upsert
+  string content = 3;
+  repeated string tags = 4;
+  string owner_id = 5;
+  uint64 ttl_seconds = 6;
+}
+
+// reader_scope is the caller's scope; the server enforces that
+// reader_scope may only resolve its own scope and its ancestors.
+message ReadMemoryRequest {
+  Scope reader_scope = 1;
+  Scope target_scope = 2;
+  string memory_id = 3;
+}
+
+message ListMemoriesRequest {
+  Scope reader_scope = 1;
+  repeated string tags = 2;
+  bool include_inherited = 3;
+  Page page = 4;
+}
+
+message ListMemoriesResponse {
+  repeated Memory memories = 1;
+  string next_cursor = 2;
+}
+
+message DeleteMemoryRequest {
+  Scope reader_scope = 1;
+  string memory_id = 2;
+}
+
+// ---------------------------------------------------------------------
+// Queue envelopes (NATS JetStream)
+//   subject: avm.jobs.<tenant_id>.<project_id>
+//   results: avm.results.<tenant_id>.<project_id>
+// ---------------------------------------------------------------------
+
+message JobMessage {
+  string job_id = 1;
+  Scope scope = 2;
+  string agent_id = 3;
+  string payload = 4;
+  string created_at = 5;
+}
+
+message ResultMessage {
+  string job_id = 1;
+  string status = 2;                 // "succeeded" | "failed" | "cancelled"
+  string result = 3;
+  string error = 4;
+}

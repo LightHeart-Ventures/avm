@@ -1,0 +1,28 @@
+[package]
+name = "avm-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "AVM gRPC control plane (tenant, agent, job and memory services)."
+
+[[bin]]
+name = "avm-server"
+path = "src/main.rs"
+
+[dependencies]
+avm-proto.workspace = true
+avm-storage.workspace = true
+avm-queue.workspace = true
+avm-observability.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+prost.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+clap.workspace = true

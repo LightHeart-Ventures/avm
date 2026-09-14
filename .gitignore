@@ -1,0 +1,8 @@
+/target
+.atum/
+**/*.rs.bk
+Cargo.lock.bak
+.env
+postgres_data/
+*.log
+.DS_Store
