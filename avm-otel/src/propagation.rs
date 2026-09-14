@@ -35,6 +35,39 @@ pub struct TraceContext {
     pub trace_state: String,
 }
 
+/// Fresh 16 bytes of trace entropy, without pulling in an RNG dependency.
+///
+/// Mixes the wall clock with a process-local counter run through a 64-bit
+/// mixing constant, which is enough to keep trace ids unique inside a
+/// deployment. Trace ids are identifiers, not secrets — nothing authenticates
+/// off them.
+pub fn new_trace_id_seed() -> [u8; 16] {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0x2545_F491_4F6C_DD1D);
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let n = COUNTER
+        .fetch_add(1, Ordering::Relaxed)
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ nanos.rotate_left(17);
+
+    let mut seed = [0u8; 16];
+    seed[..8].copy_from_slice(&nanos.to_be_bytes());
+    seed[8..].copy_from_slice(&n.to_be_bytes());
+    seed
+}
+
+/// A fresh 16-hex-char span id for a locally created span.
+pub fn new_span_id() -> String {
+    let seed = new_trace_id_seed();
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&seed[8..16]);
+    hex8(&b)
+}
+
 impl TraceContext {
     /// Build a context from raw ids.
     pub fn new(trace_id: impl Into<String>, span_id: impl Into<String>, sampled: bool) -> Self {

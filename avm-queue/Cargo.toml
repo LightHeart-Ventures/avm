@@ -8,6 +8,7 @@ description = "NATS JetStream publisher/subscriber for AVM job and result envelo
 
 [dependencies]
 avm-proto.workspace = true
+avm-otel.workspace = true
 async-nats.workspace = true
 tokio.workspace = true
 futures.workspace = true

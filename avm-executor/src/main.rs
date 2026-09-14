@@ -29,7 +29,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    avm_observability::init("avm-executor");
+    let otel = avm_otel::init_otel("avm-executor", env!("CARGO_PKG_VERSION"));
     let args = Args::parse();
 
     let pool = db::connect(&DbConfig { url: args.database_url, ..DbConfig::from_env() }).await?;
@@ -37,7 +37,12 @@ async fn main() -> anyhow::Result<()> {
     let subscriber = Subscriber::connect(&args.nats_url, &args.pool, args.filter.as_deref()).await?;
 
     let cfg = ExecutorConfig { max_concurrency: args.concurrency, ..ExecutorConfig::default() };
-    tracing::info!(pool = %args.pool, "avm-executor ready");
+    tracing::info!(
+        pool = %args.pool,
+        executor_id = %cfg.executor_id,
+        otel_export = otel.export_enabled(),
+        "avm-executor ready"
+    );
 
     Executor::new(pool, publisher, subscriber, cfg).run().await
 }

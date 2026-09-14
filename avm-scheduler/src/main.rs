@@ -21,7 +21,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    avm_observability::init("avm-scheduler");
+    let otel = avm_otel::init_otel("avm-scheduler", env!("CARGO_PKG_VERSION"));
     let args = Args::parse();
 
     let pool = db::connect(&DbConfig { url: args.database_url, ..DbConfig::from_env() }).await?;
@@ -32,6 +32,10 @@ async fn main() -> anyhow::Result<()> {
         ..SchedulerConfig::default()
     };
 
-    tracing::info!(tick_secs = args.tick_secs, "avm-scheduler ready");
+    tracing::info!(
+        tick_secs = args.tick_secs,
+        otel_export = otel.export_enabled(),
+        "avm-scheduler ready"
+    );
     Scheduler::new(pool, publisher, cfg).run().await
 }

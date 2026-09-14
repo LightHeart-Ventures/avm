@@ -210,6 +210,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "avm-observability",
+ "avm-otel",
  "avm-proto",
  "avm-queue",
  "avm-storage",
@@ -232,6 +233,7 @@ dependencies = [
  "anyhow",
  "avm-mcp-tools",
  "avm-observability",
+ "avm-otel",
  "avm-proto",
  "avm-storage",
  "axum",
@@ -297,6 +299,7 @@ name = "avm-queue"
 version = "0.1.0"
 dependencies = [
  "async-nats",
+ "avm-otel",
  "avm-proto",
  "futures",
  "serde",
@@ -312,6 +315,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "avm-observability",
+ "avm-otel",
  "avm-proto",
  "avm-queue",
  "avm-storage",

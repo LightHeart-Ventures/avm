@@ -221,3 +221,144 @@ Called out so the next person doesn't mistake absence for oversight:
   validator is already there when they do.
 - **Cryptographic schema signing.** `fingerprint` answers "did this change?",
   not "who says so?" Trust in an upstream MCP is a connection-level concern.
+
+---
+
+## Observability & OpenTelemetry
+
+**Crate:** `avm-otel` · **Endpoints:** `GET /metrics`,
+`POST /config/instrumentation`, `GET /config/instrumentation`,
+`DELETE /config/instrumentation` · **Docs:**
+[`docs/observability/otel-architecture.md`](docs/observability/otel-architecture.md),
+[`otel-setup.md`](docs/observability/otel-setup.md),
+[`trace-walkthrough.md`](docs/observability/trace-walkthrough.md),
+[`agent-instrumentation.md`](docs/observability/agent-instrumentation.md)
+
+### Problem
+
+AVM dispatches someone else's code, on someone else's behalf, onto a node the
+tenant never sees. When a job is slow, stuck, or wrong, the three questions are
+always the same: *where did the time go*, *which hop dropped it*, and *was it
+us or the agent*. None of those are answerable from per-service logs, because
+the interesting unit of work — a job — crosses gateway → scheduler → queue →
+executor → agent and back.
+
+The second problem is the opposite of the first: an operator who instruments
+*everything* in enough detail to debug one tenant has, by construction, built a
+cross-tenant surveillance system. Detail and isolation pull against each other,
+so the split has to be structural rather than a matter of discipline.
+
+### Design
+
+Two tiers, and the boundary between them is the whole point.
+
+```
+ ┌─ platform tier ──────────────── always on, 100% sampled ─────────────┐
+ │  span names, timings, outcomes, structural ids (job_id, node_id)     │
+ │  no tenant labels on platform metric series                          │
+ └─────────────────────────────────────────────────────────────────────┘
+ ┌─ tenant tier ─────────────── opt-in per tenant/project ──────────────┐
+ │  off → basic → detailed                                             │
+ │  basic:    tenant/project-labelled metric series + scoped sampling   │
+ │  detailed: + W3C context injected into the agent process            │
+ └─────────────────────────────────────────────────────────────────────┘
+```
+
+`avm-otel` is the single seam. Every service calls `init_otel()` at startup and
+gets the same resource attributes, the same sampler, the same Prometheus
+registry, and the same propagator — so a span emitted by the executor and a
+span emitted by the gateway agree on what a `tenant_id` is without either
+service owning the convention.
+
+**Modules and why each exists:**
+
+| module | responsibility |
+|---|---|
+| `config` | env parsing — `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SDK_DISABLED`, `OTEL_TRACES_SAMPLER`, `OTEL_RESOURCE_ATTRIBUTES`, protocol |
+| `resource` | auto-detected service identity: name, version from `CARGO_PKG_VERSION`, hostname, pid; explicit attrs override detection |
+| `propagation` | W3C `traceparent`/`tracestate` parse + emit, child derivation, NATS header carrier, agent env carrier |
+| `sampler` | head-based decision at ingress; `always_on`, `always_off`, `traceidratio`, `parentbased_*` |
+| `metrics` | dependency-free Prometheus exposition — counters, gauges, histograms, label escaping, name sanitisation |
+| `level` | the `off`/`basic`/`detailed` ladder, fail-closed parsing, tenant-vs-project row resolution |
+| `fields` | the naming contract: dotted lowercase span names, snake_case identity fields |
+
+**Trace shape.** One trace id spans the journey; the parent links reproduce the
+shape documented in the walkthrough and asserted in the integration test:
+
+```
+gateway.dispatch_job
+  ├─ scheduler.place_job
+  │    └─ scheduler.node_selection_score
+  ├─ executor.run_container
+  │    ├─ container.pull_image
+  │    └─ container.run
+  └─ queue.publish_result
+```
+
+Context rides HTTP headers inbound and NATS message headers internally, so the
+hop that most systems lose — the async queue hand-off — is the one that is
+explicitly carried on `JobMessage` (`traceparent`, `tracestate`,
+`instrumentation_level`) rather than inferred.
+
+**Sampling.** Platform traces are 100% sampled: an operator debugging AVM
+itself cannot be told the interesting trace was the one that got dropped. The
+tenant tier narrows from there and **never widens** — a tenant ratio can only
+subtract from the platform decision, and an upstream `sampled=0` is honoured
+end to end. Both properties are tests, not comments.
+
+**Metric hierarchy.** Platform families (`avm_gateway_request_duration_seconds`,
+`avm_scheduler_job_placement_duration_seconds`,
+`avm_executor_container_duration_seconds`, `avm_queue_message_size_bytes`,
+`avm_queue_depth`) carry no tenant label at all — so the always-on tier cannot
+leak tenant cardinality even by accident. Tenant families
+(`avm_tenant_job_count_total`, `avm_tenant_job_duration_seconds`,
+`avm_tenant_model_cache_hit_ratio`) only ever get a series when that tenant is
+at `basic` or above; `off` emits nothing, which is the single most important
+test in the suite.
+
+### Threat model
+
+The architecture doc carries this in full; the short version, because it is the
+reason for the tier split:
+
+- **What logging reveals.** Structural facts only — job ids, tenant/project
+  ids, timings, outcomes, image refs, node ids. Never job payloads, prompts,
+  agent stdout content, auth tokens, model weights, or env values. Agent
+  stdout is correlated, not captured, unless the tenant asks for it.
+- **Who can access it.** Platform telemetry goes to the operator's backend and
+  is operator-visible by definition. Tenant-labelled series exist only for
+  tenants that opted in, so a compromised dashboard cannot enumerate tenants
+  that never enabled instrumentation.
+- **Cardinality as a DoS surface.** Every label value that touches a metric
+  name is sanitised and the outcome labels are a closed set — an agent cannot
+  inflate the registry by returning novel outcome strings.
+- **Kill switch.** `OTEL_SDK_DISABLED=true` wins over a configured endpoint,
+  and an unset endpoint makes the whole thing a no-op rather than an error —
+  telemetry can never be the reason a job fails to run.
+
+### Testing
+
+100+ tests across the workspace, all green. The ones that carry the design:
+
+- `off_emits_no_tenant_series` — opt-in is real, in both `avm-otel` and the executor
+- `tenant_ratio_narrows_but_never_widens`, `sampling_respects_an_upstream_drop`
+- `one_trace_id_spans_the_whole_journey`, `parent_links_reproduce_the_documented_shape`
+- `only_detailed_reaches_the_agent_process`, `detailed_without_a_sampled_parent_injects_nothing`
+- `requeue_does_not_widen_instrumentation` — a retry cannot escalate a tenant's level
+- `outcome_labels_are_low_cardinality`, `label_values_are_escaped`, `names_are_sanitized`
+- `init_is_a_noop_without_an_endpoint`, `sdk_disabled_wins_over_a_configured_endpoint`
+- `observability_fields_are_optional_on_the_wire` — old producers still parse
+
+### Deliberately out of scope
+
+- **Tail-based sampling.** Head-based only. Tail sampling belongs in the
+  collector, where it can see the whole trace; the collector config in
+  `deploy/otel/` is the place it lands, and nothing here blocks it.
+- **A shipped collector sidecar.** `docker-compose.otel.yml` runs collector +
+  Jaeger + Prometheus for local dev. Per-node sidecar deployment is an ops
+  decision, not a code one.
+- **Log export over OTLP.** Logs are structured and trace-correlated through
+  `tracing`; shipping them as OTLP log records is a collector receiver away and
+  deliberately not a second export path in-process.
+- **Agent SDK.** Agents publish custom metrics via the result envelope or their
+  own OTLP endpoint. We define the contract, not a client library.
