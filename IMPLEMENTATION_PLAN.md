@@ -181,7 +181,114 @@ podman push "$REGISTRY/$TENANT_ID/agent:latest"
 
 ---
 
-## Phase 3: Security & Resource Limits (Weeks 5–6)
+## Phase 3A: Memory Scope Enforcement (Weeks 5–6, parallel with 3B)
+
+### Goal
+Implement the three-layer memory scope enforcement described in `MEMORY_SCOPE_SECURITY.md` and
+`ARCHITECTURE.md §Memory Scope Enforcement`. This closes the critical tenant-isolation gap where
+an agent can pass an arbitrary `scope_id` to `avm_get_memory` and read sibling agent/project
+memories.
+
+### Scope
+
+#### 3A.1 JobContext — Immutable Identity Token
+
+**Crate:** `avm-executor/src/job_context.rs` (new file)
+
+- Implement `JobContext` struct: `{ job_id, tenant_id, project_id, agent_id, scope, issued_at, nonce }`
+- Implement `sign_and_encode(signing_key)` — HMAC-SHA256 over JSON payload, base64-encoded
+- Implement `verify_and_decode(token, signing_key)` — HMAC verify + expiry check (1h TTL)
+- Add `AVM_CONTEXT_SIGNING_KEY` env var to startup sequence and `avm.toml` schema
+- Inject signed `AVM_JOB_CONTEXT` token into every container/process at launch (Scheduler side)
+
+```rust
+// avm-executor/src/job_context.rs
+pub struct JobContext {
+    pub job_id: String, pub tenant_id: String, pub project_id: String,
+    pub agent_id: String, pub scope: MemoryScope, pub issued_at: i64, pub nonce: String,
+}
+impl JobContext {
+    pub fn sign_and_encode(&self, key: &[u8]) -> String { ... }
+    pub fn verify_and_decode(token: &str, key: &[u8]) -> Result<Self, ContextError> { ... }
+}
+```
+
+**Tests:** expired token rejected, HMAC tamper rejected, valid token decoded correctly.
+
+---
+
+#### 3A.2 MemoryService ACL — `scope_acl.rs`
+
+**Crate:** `avm-memory/src/scope_acl.rs` (new file)
+
+- Implement `check_read_access(ctx: &JobContext, target_scope, target_scope_id) -> Result`
+- Implement `check_write_access(ctx: &JobContext, target_scope, target_scope_id) -> Result`
+- Error types: `ScopeViolation`, `AgentScopePrivate`, `CrossTenantDenied`
+- Apply in `MemoryService::read()` and `MemoryService::write()` (defense-in-depth layer)
+
+Access rules enforced:
+- Project agent cannot read sibling project memories
+- Project agent cannot read sibling agent memories  
+- Cross-tenant reads always denied
+- Agent memories default to PRIVATE (parents cannot read up)
+
+**Tests:** 8 cases from `MEMORY_SCOPE_SECURITY.md §Test Cases` — all must pass.
+
+---
+
+#### 3A.3 MCP Gateway — First-Line Validation
+
+**Crate:** `avm-gateway/src/mcp_router.rs` (additions)
+
+- In `handle_get_memory`: verify `JobContext` HMAC → call `check_read_access` → reject with 403 on failure
+- In `handle_upsert_memory`: same flow via `check_write_access`
+- Return structured `MemoryAccessDenied` JSON error to agent on rejection
+- Emit audit log event on every access (success and denial)
+
+---
+
+#### 3A.4 Audit Logging
+
+**Crate:** `avm-observability/src/audit.rs` (new file)
+
+- `AuditEvent` struct: `{ timestamp, event_type, job_id, agent_id, tenant_id, project_id, target_scope, target_scope_id, outcome, denial_reason }`
+- Prometheus counters: `avm_memory_access_total{outcome}`, `avm_memory_access_denied_total{reason}`
+- Structured JSON log line for every memory access (INFO on success, WARN on denial)
+
+---
+
+#### 3A.5 Integration Tests
+
+**File:** `tests/integration/memory_scope_isolation.rs` (new file)
+
+8 test cases (see `MEMORY_SCOPE_SECURITY.md §Test Cases`):
+1. Project agent cannot read sibling project memory
+2. Project agent cannot read sibling agent memory
+3. Project agent cannot read other-tenant memory
+4. Agent can read own agent memory
+5. Agent can read parent project memory
+6. Agent can read parent tenant memory
+7. Forged JobContext HMAC is rejected
+8. Expired JobContext is rejected
+
+**Completion criteria:** All 8 pass with `cargo test --test memory_scope_isolation`.
+
+---
+
+### Effort Estimate
+
+| Subtask | Effort |
+|---------|--------|
+| 3A.1 JobContext | 4h |
+| 3A.2 scope_acl.rs | 3h |
+| 3A.3 MCP Gateway | 2h |
+| 3A.4 Audit logging | 2h |
+| 3A.5 Integration tests | 3h |
+| **Total** | **~1.5 days** |
+
+---
+
+## Phase 3B: Container Security & Resource Limits (Weeks 5–6)
 
 ### Goal
 Enforce CPU, memory, process limits, and user isolation per job.
