@@ -162,8 +162,105 @@ Project Memory (scope="project", scope_id="b_payments")
 Agent Memory (scope="agent", scope_id="ag_pr_reviewer")
   ✓ Readable by: ag_pr_reviewer only
   ✗ Readable by: ag_task_executor (sibling agent)
-  ✓ Readable by: parent tenant/project agents (optional, default deny)
+  ✗ Readable by: parent tenant/project agents (DEFAULT DENY — use explicit project-memory write to share up)
 ```
+
+**Design rule:** Parent scopes CANNOT read child agent memories. An agent that needs to share
+state upward must explicitly call `avm_upsert_memory(scope="project", ...)`. This is the principle
+of least privilege: scope narrowing is downward only (parent reads children), not upward.
+
+---
+
+## Memory Scope Enforcement
+
+> **Security requirement:** Agents MUST NOT be able to read or write memories outside their
+> permitted scope, even by passing arbitrary `scope_id` values in tool calls.
+
+### Enforcement Architecture
+
+Scope enforcement uses **three layers** (defense-in-depth). An agent's permitted scope set is
+derived exclusively from its `JobContext` — an HMAC-signed token injected by the Scheduler at
+launch that the agent process cannot forge or modify.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Scheduler (trusted)                                             │
+│   Creates JobContext { tenant_id, project_id, agent_id, scope } │
+│   Signs with HMAC-SHA256(AVM_CONTEXT_SIGNING_KEY)               │
+│   Injects as AVM_JOB_CONTEXT env var in every agent process     │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │
+                     ┌─────────▼──────────┐
+                     │  MCP Gateway        │  Layer 1: fast reject
+                     │  handle_get_memory  │  Verifies JobContext HMAC
+                     │  → check_read_access│  Rejects bad scope_id before
+                     │  → audit_log()      │  touching MemoryService
+                     └─────────┬──────────┘
+                               │
+                     ┌─────────▼──────────┐
+                     │  MemoryService      │  Layer 2: server-side ACL
+                     │  Read / Write       │  Re-derives permitted scopes
+                     │  → check_access()   │  from JobContext (defence-in-
+                     │  → DB query         │  depth; catches gateway bypass)
+                     └────────────────────┘
+```
+
+### JobContext (Immutable Identity Token)
+
+```rust
+/// Signed at job launch; verified by MCP Gateway and MemoryService.
+/// Agent cannot modify: it's an env var, signed, and short-lived (1h TTL).
+pub struct JobContext {
+    pub job_id:    String,       // "job_abc123"
+    pub tenant_id: String,       // "t_acme"
+    pub project_id: String,      // "b_payments"
+    pub agent_id:  String,       // "ag_pr_reviewer"
+    pub scope:     MemoryScope,  // agent's own scope level
+    pub issued_at: i64,          // unix seconds; reject if > 1h old
+    pub nonce:     String,       // 32-byte hex; prevents replay
+}
+```
+
+### Access Rules (enforced by `scope_acl::check_read_access`)
+
+| Agent scope | Can READ | Cannot READ |
+|-------------|----------|-------------|
+| `system`    | system, tenant(any), project(any), agent(any) | — |
+| `tenant`    | system, own tenant, own tenant's projects, agents within | Other tenants |
+| `project`   | system, own tenant, **own project**, own agents | Sibling projects, other tenants |
+| `agent`     | system, own tenant, own project, **own agent** | Sibling agents, sibling projects |
+
+**Key rules:**
+- A project-scoped agent can NEVER read a sibling project's memories (`b_payments` cannot read `b_infra`).
+- An agent can NEVER read a sibling agent's memories (`ag_pr_reviewer` cannot read `ag_task_executor`).
+- Agent-scoped memories default to PRIVATE — parents cannot read up.
+- Cross-tenant reads are always denied (no matter what scope is requested).
+
+### Error Responses
+
+The MCP Gateway returns a structured `PermissionDenied` error; agents receive:
+```json
+{
+  "error": "MemoryAccessDenied",
+  "code": 403,
+  "message": "scope project/b_infra is not readable by job job_abc123 (agent scope: project/b_payments)",
+  "job_id": "job_abc123"
+}
+```
+
+### Startup Change Required
+
+Add `AVM_CONTEXT_SIGNING_KEY` to the startup sequence (Step 2 — Secrets Manager init):
+```toml
+# avm.toml
+[security]
+context_signing_key_env = "AVM_CONTEXT_SIGNING_KEY"  # 32-byte hex key
+context_token_ttl_secs = 3600  # 1 hour
+```
+
+See [`MEMORY_SCOPE_SECURITY.md`](./MEMORY_SCOPE_SECURITY.md) for the complete design: full
+`scope_acl.rs` implementation, `JobContext` HMAC signing, MCP Gateway integration, audit logging
+design, and 8 integration test cases.
 
 ---
 
